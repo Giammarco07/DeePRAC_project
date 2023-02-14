@@ -1,0 +1,23 @@
+1. Move "MySlicerExtension" folder in your root directory 
+(ex. C:, D:, ...)
+
+2. In your shell/terminal, from your root directory, 
+paste and run the following line:
+
+cd /MySlicerExtension/KiTS/KiTSegmentationForCT
+ 
+3. then paste and run:
+
+docker build --rm --no-cache -f Dockerfile -t kits .
+
+4. Leave "MySlicerExtension" folder in the same directory 
+as before (ex. C:, D:, ...) and open 3DSlicer:
+
+Search in All Modules --> Extension Wizard
+and Press "Select Extension" looking for "KiTS" folder
+inside "MySlicerExtentsion" and select it.
+(Follow 3DSlicer instructions)
+
+5. Your "KiTSegmentationForCT" Module is now available.
+
+!Never move "MySlicerExtension" folder!

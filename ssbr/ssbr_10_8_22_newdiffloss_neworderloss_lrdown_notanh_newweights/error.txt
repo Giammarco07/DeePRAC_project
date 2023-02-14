@@ -1,0 +1,2 @@
+/tsi/clusterhome/glabarbera/ssbr/fastai_function.py:114: RuntimeWarning: invalid value encountered in long_scalars
+  num_pixel.insert(i, np.sum(maskzero)/np.sum(mask))
