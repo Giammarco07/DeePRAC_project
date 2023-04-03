@@ -16,7 +16,7 @@ import sys
 ee = sys.float_info.epsilon
 from utils.figures import np_to_img
 from utils.losses import fnr,ce, soft_dice_loss, dice_loss, soft_dice_loss_old,soft_dice_loss_batch, soft_dice_loss_old_new, dice_loss_val_new, compute_dtm, compute_ddt, L1, bce, general_dice_loss_batch
-from utils.vesselness_torch import vesselness_gt, vesselness_true,vesselness_nogt, vesselness_true_nogt, vesselness_frangi_ssvmd, vesselness_jerman_ssvmd, vesselness_self_frangi
+from utils.vesselness_torch import vesselness_frangi_ssvmd, vesselness_jerman_ssvmd, msloss, fvloss
 from Test_Networks.nnunet3d import val
 
 def train(start_epoch, num_epochs, best_dice, val_step, early_stopping, nets, optimizers, learning, init_lr,
@@ -184,29 +184,19 @@ def train(start_epoch, num_epochs, best_dice, val_step, early_stopping, nets, op
                                 loss_G_joint += w * (1 / (2 ** p)) * (loss_dice + loss_ce + loss_bl)
                     elif supervision == 'deepvesselmsloss':
                         w = (8 / 15)
-                        flag = 0
                         for p in range(4):
                             out = output[p].clone() + 1e-20
                             loss_dice = soft_dice_loss_batch(out, target)
                             loss_ce = ce(torch.log(out), seg)
                             if p == 0:
-                                loss_G_joint = w * (1 / (2 ** p)) * (wd*loss_dice + wd*loss_ce) 
-                                for v in range(1, channel_dim):
-                                    ww = torch.sum(target[:,v],dim=(1,2,3)) > 0
-                                    wt = ww.detach() 
-                                    wwt = torch.sum(target[:,v]).detach()
-                                    if wwt!= 0:
-                                        eigenv_tr = vesselness_true_nogt(target[:,v], wt)
-                                        eigenv_true = eigenv_tr.detach()
-                                        if flag==0:
-                                            loss_vessel = vesselness_nogt(out[:,v], wt, eigenv_true)
-                                            flag = 1
-                                        else:
-                                            loss_vessel += vesselness_nogt(out[:,v], wt, eigenv_true)                                      
-                                loss_G_joint += wv*(1/(channel_dim-1))*loss_vessel
-                                V_losses.append(wv*(1/(channel_dim-1))*loss_vessel.item())
+                                loss_G_joint = w * (1 / (2 ** p)) * (wd*loss_dice + wd*loss_ce)
                             else:
                                 loss_G_joint += w * (1 / (2 ** p)) * (wd*loss_dice + wd*loss_ce)
+
+                        loss_vessel = msloss([output[0]],target,sigma=25,gt=False)
+                        loss_G_joint += wv*loss_vessel
+                        V_losses.append(wv * loss_vessel.item())
+
                     elif supervision == 'deepvesseltsloss':
                         w = (8 / 15)
                         for p in range(4):
@@ -215,183 +205,91 @@ def train(start_epoch, num_epochs, best_dice, val_step, early_stopping, nets, op
                             loss_ce = ce(torch.log(out), seg)
                             if p == 0:
                                 loss_G_joint = w * (1 / (2 ** p)) * (wd*loss_dice + wd*loss_ce)
-                                for v in range(1, channel_dim):
-                                    ww = torch.sum(target[:,v],dim=(1,2,3)) > 0
-                                    wt = ww.type(torch.uint8).detach()
-                                    www = torch.sum(target[:,v])
-                                    wwt = www.type(torch.uint8).detach()
-                                    if wwt!= 0:
-                                        eigenv_tr = vesselness_true_nogt(target[:,v], wt)
-                                        eigenv_true = eigenv_tr.detach()
-                                        loss_vessel = vesselness_nogt(out[:,v], wt, eigenv_true)
-                                        loss_vessel_self = vesselness_self_frangi(out[:,v], target[:,v])
-                                        loss_G_joint += (wv*loss_vessel+(1/(channel_dim-1))*loss_vessel_self)
-                                        V_losses.append(wv*loss_vessel.item()+(1/(channel_dim-1))*loss_vessel_self.item())
                             else:
                                 loss_G_joint += w * (1 / (2 ** p)) * (wd*loss_dice + wd*loss_ce)
+
+                        loss_vessel = msloss([output[0]], target, sigma=25, gt=False)
+                        loss_vessel_self = fvloss([output[0]], target, sigma=25)
+                        loss_G_joint += (wv * loss_vessel + loss_vessel_self)
+                        V_losses.append(wv * loss_vessel.item()+loss_vessel_self.item())
+
                     elif supervision == 'deepvesselgtmsloss':
                         w = (8 / 15)
-                        flag = 0
                         for p in range(4):
                             out = output[p].clone() + 1e-20
                             loss_dice = soft_dice_loss_batch(out, target)
                             loss_ce = ce(torch.log(out), seg)
                             if p == 0:   
                                 loss_G_joint = w * (1 / (2 ** p)) * (wd*loss_dice + wd*loss_ce)
-                                kernel = torch.ones((channel_dim, 1, 3, 3, 3), dtype=torch.float16).to("cuda")
-                                gt_dil = torch.clamp(
-                                    torch.nn.functional.conv3d(target.type(torch.float16), kernel, padding=1, groups=channel_dim), 0, 1)
-                                for v in range(1, channel_dim):
-                                    gt = gt_dil[:,v, :, :, :]
-                                    gt_dilate = gt.detach()
-                                    wt = torch.sum(target[:,v]).detach()
-                                    #print(wt.item())
-                                    if wt!= 0:
-                                        eigenv_tr = vesselness_true(target[:,v], gt_dilate,sigma=25)
-                                        eigenv_true = eigenv_tr.detach()
-                                        if flag==0:
-                                            loss_vessel = vesselness_gt(out[:,v], gt_dilate, eigenv_true,sigma=25)
-                                            flag = 1
-                                        else:
-                                            loss_vessel += vesselness_gt(out[:,v], gt_dilate, eigenv_true,sigma=25)                                     
-                                loss_G_joint += wv*(1/(channel_dim-1))*loss_vessel
-                                V_losses.append(wv*(1/(channel_dim-1))*loss_vessel.item())
                             else:
                                 loss_G_joint += w * (1 / (2 ** p)) * (wd*loss_dice + wd*loss_ce)
+
+                        loss_vessel = msloss([output[0]], target, sigma=25)
+                        loss_G_joint += wv * loss_vessel
+                        V_losses.append(wv * loss_vessel.item())
+
                     elif supervision == 'deepvesselgttsloss':
                         w = (8 / 15)
-                        flag = 0
                         for p in range(4):
                             out = output[p].clone() + 1e-20
                             loss_dice = soft_dice_loss_batch(out, target)
                             loss_ce = ce(torch.log(out), seg)
                             if p == 0:   
                                 loss_G_joint = w * (1 / (2 ** p)) * (wd*loss_dice + wd*loss_ce)
-                                kernel = torch.ones((channel_dim, 1, 3, 3, 3), dtype=torch.float16).to("cuda")
-                                gt_dil = torch.clamp(
-                                    torch.nn.functional.conv3d(target.type(torch.float16), kernel, padding=1, groups=channel_dim), 0, 1)
-                                for v in range(1, channel_dim):
-                                    gt = gt_dil[:,v, :, :, :]
-                                    gt_dilate = gt.detach()
-                                    wt = torch.sum(target[:,v]).detach()
-                                    if wt!= 0:
-                                        eigenv_tr = vesselness_true(target[:,v], gt_dilate,sigma=25)
-                                        eigenv_true = eigenv_tr.detach()
-                                        if flag==0:
-                                            loss_vessel = vesselness_gt(out[:,v], gt_dilate, eigenv_true,sigma=25)
-                                            loss_vessel_self = vesselness_self_frangi(out[:,v], target[:,v],sigma=25)
-                                            flag = 1
-                                        else:
-                                            loss_vessel += vesselness_gt(out[:,v], gt_dilate, eigenv_true,sigma=25)
-                                            loss_vessel_self += vesselness_self_frangi(out[:,v], target[:,v],sigma=25)                                   
-                                loss_G_joint += (wv*(1/(channel_dim-1))*loss_vessel+0.5*(1/(channel_dim-1))*loss_vessel_self)
-                                V_losses.append(wv*(1/(channel_dim-1))*loss_vessel.item()+0.5*(1/(channel_dim-1))*loss_vessel_self.item())
                             else:
                                 loss_G_joint += w * (1 / (2 ** p)) * (wd*loss_dice + wd*loss_ce)
+
+                        loss_vessel = msloss([output[0]], target, sigma=25)
+                        loss_vessel_self = fvloss([output[0]], target, sigma=25)
+                        loss_G_joint += (wv * loss_vessel + loss_vessel_self)
+                        V_losses.append(wv * loss_vessel.item()+loss_vessel_self.item())
+
                     elif supervision == 'deepvesselgtdeepmsloss':
                         w = (8 / 15)
-                        flag = 0
-                        kernel = torch.ones((channel_dim, 1, 3, 3, 3), dtype=torch.float16).to("cuda")
-                        gt_dil = torch.clamp(torch.nn.functional.conv3d(target.type(torch.float16), kernel, padding=1, groups=channel_dim), 0, 1)
                         for p in range(4):
                             out = output[p].clone() + 1e-20
                             loss_dice = soft_dice_loss_batch(out, target)
                             loss_ce = ce(torch.log(out), seg)
                             if p == 0:
                                 loss_G_joint = w * (1 / (2 ** p)) * (wd*loss_dice + wd*loss_ce)
-                                for v in range(1, channel_dim):
-                                    gt = gt_dil[:,v, :, :, :]
-                                    gt_dilate = gt.detach()
-                                    wt = torch.sum(target[:,v]).detach()
-                                    #print(wt.item())
-                                    if wt!= 0:
-                                        eigenv_tr = vesselness_true(target[:,v], gt_dilate,sigma=25)
-                                        eigenv_true = eigenv_tr.detach()
-                                        if flag==0:
-                                            loss_vessel = vesselness_gt(out[:,v], gt_dilate, eigenv_true,sigma=25)
-                                            flag = 1
-                                        else:
-                                            loss_vessel += vesselness_gt(out[:,v], gt_dilate, eigenv_true,sigma=25)
-                                loss_G_joint += w * (1 / (2 ** p)) * wv*(1/(channel_dim-1))*loss_vessel
-                                V_losses.append(wv*(1/(channel_dim-1))*loss_vessel.item())
                             else:
                                 loss_G_joint += w * (1 / (2 ** p)) * (wd*loss_dice + wd*loss_ce)
-                                for v in range(1, channel_dim):
-                                    gt = gt_dil[:,v, :, :, :]
-                                    gt_dilate = gt.detach()
-                                    wt = torch.sum(target[:,v]).detach()
-                                    #print(wt.item())
-                                    if wt!= 0:
-                                        eigenv_tr = vesselness_true(target[:,v], gt_dilate,sigma=25)
-                                        eigenv_true = eigenv_tr.detach()
-                                        if flag==0:
-                                            loss_vessel = vesselness_gt(out[:,v], gt_dilate, eigenv_true,sigma=25-(5*p))
-                                            flag = 1
-                                        else:
-                                            loss_vessel += vesselness_gt(out[:,v], gt_dilate, eigenv_true,sigma=25-(5*p))
-                                loss_G_joint += w * (1 / (2 ** p)) * wv*(1/(channel_dim-1))*loss_vessel
+
+                        loss_vessel = msloss(output, target, sigma=25)
+                        loss_G_joint += wv * loss_vessel
+                        V_losses.append(wv * loss_vessel.item())
+
                     elif supervision == 'deepvesselgtdeeptsloss':
                         w = (8 / 15)
-                        flag = 0
-                        kernel = torch.ones((channel_dim, 1, 3, 3, 3), dtype=torch.float16).to("cuda")
-                        gt_dil = torch.clamp(torch.nn.functional.conv3d(target.type(torch.float16), kernel, padding=1, groups=channel_dim), 0, 1)
                         for p in range(4):
                             out = output[p].clone() + 1e-20
                             loss_dice = soft_dice_loss_batch(out, target)
                             loss_ce = ce(torch.log(out), seg)
                             if p == 0:
                                 loss_G_joint = w * (1 / (2 ** p)) * (wd*loss_dice + wd*loss_ce)
-                                for v in range(1, channel_dim):
-                                    gt = gt_dil[:,v, :, :, :]
-                                    gt_dilate = gt.detach()
-                                    wt = torch.sum(target[:,v]).detach()
-                                    if wt!= 0:
-                                        eigenv_tr = vesselness_true(target[:,v], gt_dilate,sigma=25)
-                                        eigenv_true = eigenv_tr.detach()
-                                        if flag==0:
-                                            loss_vessel = vesselness_gt(out[:,v], gt_dilate, eigenv_true,sigma=25)
-                                            loss_vessel_self = vesselness_self_frangi(out[:,v], target[:,v],sigma=25)
-                                            flag = 1
-                                        else:
-                                            loss_vessel += vesselness_gt(out[:,v], gt_dilate, eigenv_true,sigma=25)
-                                            loss_vessel_self += vesselness_self_frangi(out[:,v], target[:,v],sigma=25)
-                                loss_G_joint += w * (1 / (2 ** p)) * (wv*(1/(channel_dim-1))*loss_vessel+(1/(channel_dim-1))*loss_vessel_self)
-                                V_losses.append(wv*(1/(channel_dim-1))*loss_vessel.item()+(1/(channel_dim-1))*loss_vessel_self.item())
                             else:
                                 loss_G_joint += w * (1 / (2 ** p)) * (wd*loss_dice + wd*loss_ce)
-                                for v in range(1, channel_dim):
-                                    gt = gt_dil[:,v, :, :, :]
-                                    gt_dilate = gt.detach()
-                                    wt = torch.sum(target[:,v]).detach()
-                                    if wt!= 0:
-                                        eigenv_tr = vesselness_true(target[:,v], gt_dilate,sigma=25)
-                                        eigenv_true = eigenv_tr.detach()
-                                        if flag==0:
-                                            loss_vessel = vesselness_gt(out[:,v], gt_dilate, eigenv_true,sigma=25-(5*p))
-                                            loss_vessel_self = vesselness_self_frangi(out[:,v], target[:,v],sigma=25-(5*p))
-                                            flag = 1
-                                        else:
-                                            loss_vessel += vesselness_gt(out[:,v], gt_dilate, eigenv_true,sigma=25-(5*p))
-                                            loss_vessel_self += vesselness_self_frangi(out[:,v], target[:,v],sigma=25-(5*p))
-                                loss_G_joint += w * (1 / (2 ** p)) * (wv*(1/(channel_dim-1))*loss_vessel+(1/(channel_dim-1))*loss_vessel_self)
+
+                        loss_vessel = msloss(output, target, sigma=25)
+                        loss_vessel_self = fvloss(output, target, sigma=25)
+                        loss_G_joint += (wv * loss_vessel + loss_vessel_self)
+                        V_losses.append(wv * loss_vessel.item()+loss_vessel_self.item())
+
                     elif supervision == 'deepvesselfvloss':
                         w = (8 / 15)
-                        loss_vessel = torch.zeros(1)
                         for p in range(4):
                             out = output[p].clone() + 1e-20
                             loss_dice = soft_dice_loss_batch(out, target)
                             loss_ce = ce(torch.log(out), seg)
                             if p == 0:   
                                 loss_G_joint = w * (1 / (2 ** p)) * (wd*loss_dice + wd*loss_ce)
-                                for v in range(1, channel_dim):
-                                    ww = torch.sum(target[:,v]) 
-                                    wt = ww.type(torch.uint8).detach()
-                                    if wt!= 0:
-                                        loss_vessel_self = vesselness_self_frangi(out[:,v], target[:,v])
-                                        loss_G_joint += ((1/(channel_dim-1))*loss_vessel_self)
-                                        V_losses.append((1/(channel_dim-1))*loss_vessel_self.item())
                             else:
                                 loss_G_joint += w * (1 / (2 ** p)) * (wd*loss_dice + wd*loss_ce)
+
+                        loss_vessel_self = fvloss([output[0]], target, sigma=25)
+                        loss_G_joint += loss_vessel_self
+                        V_losses.append(wv * loss_vessel.item()+loss_vessel_self.item())
+
                     elif supervision == 'deepvesselgtfrangissvmd':
                         w = (8 / 15)
                         for p in range(4):

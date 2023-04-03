@@ -112,13 +112,14 @@ Our vesselness loss function, named Tubular structures Loss - T sLoss, is compos
 Following Figure shows the complete pipeline for the proposed tubular structures loss function. 
 ![TsLoss](assets/pipeline-tsloss-new.png)
 
-Details will be released in a future journal paper.
+Details will be released in a future journal paper. The relative code implementation is in myU-Net/utils/vesselness_torch.py.
+(The code implementation is just for 3D images/patches, not yet implemented for 2D images/slices)
 
 To choose the different implementation add the optional argument --deepsup followed by "deepvessel" + (no space):
 - msloss (just morphological similarity loss on all pixels - very very long, not suggested to use)
 - fvloss
 - tsloss (tubular structures loss on all pixels - even longer, not suggested)
-- gtmsloss (alculating eigenvalues over the entire image is expensive in terms of computational time, and the use of dilation revealed to be sufficient for our purpose thanks also to the combined use of voxel-wise loss functions)
+- gtmsloss (calculating eigenvalues over the entire image is expensive in terms of computational time, and the use of dilation revealed to be sufficient for our purpose thanks also to the combined use of voxel-wise loss functions)
 - gttsloss
 - gtdeepmsloss (in order to inject as much information as possible to the network, we do the same loss for the subsequent three output levels of resolution using the Deep Supervision technique. See figure for details)
 - **gtdeeptsloss**  (SUGGESTED TO USE. The one presented in the Figure pipeline)

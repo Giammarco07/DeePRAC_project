@@ -14,6 +14,28 @@ import numpy as np
 class eig_real_symmetric(torch.autograd.Function):
     @staticmethod
     def forward(ctx, A):
+        '''
+        A is the hessian matrix but for all points of all patches, so shape is [batch_dim*x_dim*y_dim*z_dim,3,3]
+        so I do evecs[:,0,:] to select for all the voxels, the line that correspond to the x direction (1 for y and 2 for z),
+        then I extract the position where this direction is the biggest: xx = torch.argmax(torch.abs(evecs[:,0,:]),dim=1,keepdim=True)
+
+        With torch.linalg.eig the normalized eigenvectors are given per column with respect to the eigenvalue and per row
+        with respect to the directions, e.g. for a voxel:
+        eval = [-256 -41 0]
+        evec = [0.9 0.3 0; 0 0 1; -0.3 0.9 0]
+
+        so eval[0]=-256 and its evec is [0.9; 0; -0.3] = [x; y; z]
+
+        The xx and xxx step is done because the use of permutation matrix (as described in the artcile/thesis) was slower
+        and so I just rearranged the eigenvalues and eigenvectors to be [most x-oriented, most y-oriented, most z-oriented].
+
+        So for the example, we will have xx=0, yy=2, zz = 1 and eval will be rearranged as eval = [-256 0 -41]
+        and xxx, yyy and zzz simply consist in repeating the values and reorganizing the eigenvector matrix which is used
+        for the backpropagation, which will therefore be
+
+        evec = [0.9 0 0.3; 0 1 0; -0.3 0 0.9]
+        '''
+
         evalue, evec = torch.linalg.eig(A)
 
         evecs = torch.view_as_real(evec)[..., 0]
@@ -43,6 +65,10 @@ class eig_real_symmetric(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_evals):
+
+        '''
+        See 'Differentiability of Morphological similarity loss function' for further details on these part
+        '''
 
         # grad_evals: (...,na)
         na = grad_evals.shape[-1]
@@ -80,71 +106,12 @@ class eig_real_symmetric(torch.autograd.Function):
             UUT = UU.transpose(-2, -1)  # (nbatch,na,na)
             econtrib = torch.bmm(UUT, dLde)
             econtrib = econtrib.view(nbatch, na, na)
+
         return econtrib
 
 
-def hessian_matrix_sigma_old(image, sigmas=5):
-    H = torch.zeros(image.size() + (3, 3), dtype=torch.float32, requires_grad=True).to(torch.device("cuda"))
-    '''
-    PyTorch or more precisely autograd is not very good in handling in-place operations, 
-    especially on those tensors with the requires_grad flag set to True.
-    Generally you should avoid in-place operations where it is possible, in some cases it can work, 
-    but you should always avoid in-place operations on tensors where you set requires_grad to True.
-    Unfortunately there are not many pytorch functions to help out on this problem. 
-    So you would have to use a helper tensor to avoid the in-place operation.
-    '''
-    H = H + 0  # new tensor, out-of-place operation (get around the problem, it is like "magic!")
-
-    gaussian_importance_map = torch.as_tensor(gaussian_map_hessian((image.size()[1], image.size()[2], image.size()[3])),
-                                              dtype=torch.float16).to("cuda").detach()
-    gaussian_filtered = (image * 255.0) * gaussian_importance_map
-
-    for i in range(1, sigmas + 1, sigmas // 5):
-        sigma = i
-        gaussian_filtered = F.gaussian_blur(image * 255.0, 2 * int(4 * sigma + 0.5) + 1, sigma)
-        H[..., 0, 0] = H[..., 0, 0] + torch.gradient(torch.gradient(gaussian_filtered, dim=1)[0], dim=1)[0]
-        H[..., 0, 1] = H[..., 0, 1] + torch.gradient(torch.gradient(gaussian_filtered, dim=1)[0], dim=2)[0]
-        H[..., 0, 2] = H[..., 0, 2] + torch.gradient(torch.gradient(gaussian_filtered, dim=1)[0], dim=3)[0]
-        H[..., 1, 0] = H[..., 1, 0] + torch.gradient(torch.gradient(gaussian_filtered, dim=2)[0], dim=1)[0]
-        H[..., 1, 1] = H[..., 1, 1] + torch.gradient(torch.gradient(gaussian_filtered, dim=2)[0], dim=2)[0]
-        H[..., 1, 2] = H[..., 1, 2] + torch.gradient(torch.gradient(gaussian_filtered, dim=2)[0], dim=3)[0]
-        H[..., 2, 0] = H[..., 2, 0] + torch.gradient(torch.gradient(gaussian_filtered, dim=3)[0], dim=1)[0]
-        H[..., 2, 1] = H[..., 2, 1] + torch.gradient(torch.gradient(gaussian_filtered, dim=3)[0], dim=2)[0]
-        H[..., 2, 2] = H[..., 2, 2] + torch.gradient(torch.gradient(gaussian_filtered, dim=3)[0], dim=3)[0]
-
-    return H, gaussian_filtered
-
-
-def hessian_matrix_gt_sigma_old(image, sigmas=5):
-    H = torch.zeros(image.size() + (3, 3), dtype=torch.float32, requires_grad=True).to(torch.device("cuda"))
-    '''
-    PyTorch or more precisely autograd is not very good in handling in-place operations, 
-    especially on those tensors with the requires_grad flag set to True.
-    Generally you should avoid in-place operations where it is possible, in some cases it can work, 
-    but you should always avoid in-place operations on tensors where you set requires_grad to True.
-    Unfortunately there are not many pytorch functions to help out on this problem. 
-    So you would have to use a helper tensor to avoid the in-place operation.
-    '''
-    H = H + 0  # new tensor, out-of-place operation (get around the problem, it is like "magic!")
-
-    for i in range(1, sigmas + 1, sigmas // 5):
-        sigma = i
-        gaussian_filtered = F.gaussian_blur(image * 255.0, 2 * int(4 * sigma + 0.5) + 1, sigma)
-        H[..., 0, 0] = H[..., 0, 0] + torch.gradient(torch.gradient(gaussian_filtered, dim=1)[0], dim=1)[0]
-        H[..., 0, 1] = H[..., 0, 1] + torch.gradient(torch.gradient(gaussian_filtered, dim=1)[0], dim=2)[0]
-        H[..., 0, 2] = H[..., 0, 2] + torch.gradient(torch.gradient(gaussian_filtered, dim=1)[0], dim=3)[0]
-        H[..., 1, 0] = H[..., 1, 0] + torch.gradient(torch.gradient(gaussian_filtered, dim=2)[0], dim=1)[0]
-        H[..., 1, 1] = H[..., 1, 1] + torch.gradient(torch.gradient(gaussian_filtered, dim=2)[0], dim=2)[0]
-        H[..., 1, 2] = H[..., 1, 2] + torch.gradient(torch.gradient(gaussian_filtered, dim=2)[0], dim=3)[0]
-        H[..., 2, 0] = H[..., 2, 0] + torch.gradient(torch.gradient(gaussian_filtered, dim=3)[0], dim=1)[0]
-        H[..., 2, 1] = H[..., 2, 1] + torch.gradient(torch.gradient(gaussian_filtered, dim=3)[0], dim=2)[0]
-        H[..., 2, 2] = H[..., 2, 2] + torch.gradient(torch.gradient(gaussian_filtered, dim=3)[0], dim=3)[0]
-
-    return H, gaussian_filtered
-
-
-def hessian_matrix_gt_sigma(image, sigmas=5):
-    H = torch.zeros(image.size() + (3, 3), dtype=torch.float32, requires_grad=True).to(torch.device("cuda"))
+def hessian_matrix_sigmas(img, sigmas, gt):
+    H = torch.zeros(img.size() + (3, 3), dtype=torch.float32, requires_grad=True).to(torch.device("cuda"))
     '''
     PyTorch or more precisely autograd is not very good in handling in-place operations, 
     especially on those tensors with the requires_grad flag set to True.
@@ -155,10 +122,21 @@ def hessian_matrix_gt_sigma(image, sigmas=5):
     '''
     H = H + 0  # new tensor, out-of-place operation (get around the problem, it is like "magic!")
     sigma = 1
-    gaussian_filtered = F.gaussian_blur(image * 255.0, 2 * int(4 * sigma + 0.5) + 1, sigma)
+    if gt:
+        image = img * 255.0
+    else:
+        #in case the entire patch is used, in order to deal with the all zero-region a gaussian importance map is
+        # applied to have continuity and differentiability
+        gaussian_importance_map = torch.as_tensor(
+            gaussian_map_hessian((img.size()[1], img.size()[2], img.size()[3])),
+            dtype=torch.float16).to("cuda").detach()
+        image = (img * 255.0) * gaussian_importance_map
+
+
+    gaussian_filtered = F.gaussian_blur(image, 2 * int(4 * sigma + 0.5) + 1, sigma)
     for i in range(1 + sigmas // 5, sigmas + 1, sigmas // 5):
         sigma = i
-        gaussian_filtered = gaussian_filtered + F.gaussian_blur(image * 255.0, 2 * int(4 * sigma + 0.5) + 1, sigma)
+        gaussian_filtered = gaussian_filtered + F.gaussian_blur(image, 2 * int(4 * sigma + 0.5) + 1, sigma)
 
     gaussian_filtered = gaussian_filtered / gaussian_filtered.max() * 255.0
     H[..., 0, 0] = H[..., 0, 0] + torch.gradient(torch.gradient(gaussian_filtered, dim=1)[0], dim=1)[0]
@@ -174,55 +152,34 @@ def hessian_matrix_gt_sigma(image, sigmas=5):
     return H, gaussian_filtered
 
 
-def eigen_hessian_matrix(image, gt, sigma=25):
-    H, gaussian = hessian_matrix_gt_sigma(image, sigma)
-
-    eigenvalues = eig_real_symmetric.apply(H[gt == 1])
-
-    return eigenvalues
-
-
-def eigen_hessian_matrix_nogt(image, wt, sigma=25):
-    H, gaussian = hessian_matrix_sigma_old(image, sigma)
-
-    eigenvalues = eig_real_symmetric.apply(H[wt == 1].view(-1, H.shape[-2], H.shape[-1]))
+def eigen_hessian_matrix(image, ref, sigma, gt=True):
+    H, gaussian = hessian_matrix_sigmas(image, sigma, gt)
+    if gt:
+        eigenvalues = eig_real_symmetric.apply(H[ref == 1])
+    else:
+        eigenvalues = eig_real_symmetric.apply(H[ref == 1].view(-1, H.shape[-2], H.shape[-1]))
 
     return eigenvalues
 
 
-def vesselness_gt(pred, gt, eigenvtrue, sigma=25):
-    eigenv = eigen_hessian_matrix(pred, gt, sigma)
-    # loss = L1(eigenv, eigenvtrue)
-    loss = L2(eigenv, eigenvtrue)
+def vesselness_calc(pred, target, ref, sigma, gt, l = 'L2', deep = None):
+    if deep is None:
+        eigenv_tr = eigen_hessian_matrix(target, ref, sigma, gt)
+        eigenvtrue = eigenv_tr.detach()
+    eigenv = eigen_hessian_matrix(pred, ref, sigma, gt)
+    if l=='L2':
+        loss = L2(eigenv, eigenvtrue)
+    elif l=='L1':
+        loss = L1(eigenv, eigenvtrue)
+    else:
+        print('Warning! Loss neither L2 or L1, forced to use L2')
+        loss = L2(eigenv, eigenvtrue)
 
     if torch.isnan(loss):
         print(eigenv)
         print(eigenvtrue)
 
-    return loss
-
-
-def vesselness_nogt(pred, wt, eigenvtrue, sigma=25):
-    eigenv = eigen_hessian_matrix_nogt(pred, wt, sigma)
-    # loss = L1(eigenv, eigenvtrue)
-    loss = L2(eigenv, eigenvtrue)
-    if torch.isnan(loss):
-        print(eigenv)
-        print(eigenvtrue)
-
-    return loss
-
-
-def vesselness_true(pred, gt, sigma=25):
-    eigenv = eigen_hessian_matrix(pred, gt, sigma)
-
-    return eigenv
-
-
-def vesselness_true_nogt(pred, wt, sigma=25):
-    eigenv = eigen_hessian_matrix_nogt(pred, wt, sigma)
-
-    return eigenv
+    return loss, eigenvtrue
 
 
 def frangi(eigenvalues, alpha=0.1, beta=0.1, gamma=2):
@@ -279,17 +236,134 @@ def vesselness_jerman_ssvmd(pred, gt, eigenvtrue, sigma=25):
 
     return loss
 
+def msloss(output,target,sigma=25,gt=True):
+    '''
+    Loss function to check the morphology of the structures, named morphological similarity loss function and denoted by MsLoss,
+    by comparing the eigenvalues ordered by the eigenvectors matrix as presented in the article/thesis
 
-def vesselness_self_frangi(pred, gt, sigma=25):
-    # alpha=0.1,beta=0.5,gamma=5
+    output: predictions at different level of resolution (list of prediction BxCxHxWxD), if you do not use deep supervision
+            you need to pass this argument, i.e. your output prediction BxCxHxWxD, as msloss([output],target,sigma)
+    target: reference segmentation (BxCxHxWxD)
 
-    eigenv = eigen_hessian_matrix(pred, gt, sigma)
+    sigma = maximum standard deviations for Hessian matrix, we apply 5 different Gaussian kernel from 1 to sigma. Default sigma=25
+    gt = the eigenvalues are calculated just on the dilation with a square structuring element of size 3 × 3 × 3
+        of the reference target (calculating eigenvalues over the entire image is expensive in terms of computational time,
+        and the use of dilation revealed to be sufficient for our purpose thanks also to the combined use of voxel-wise loss functions).
+        Default gt=True
+    '''
+    flag = 0
+    channel_dim = target.size()[1]
+    p_range = len(output)
+    w = np.array([1 / (2 ** i) for i in range(p_range)])
+    w = w / w.sum()
 
-    _, indices = torch.abs(eigenv).sort(dim=1, stable=True)
+    if gt:
+        #creating the dilation of the reference segmentation in which we will calculate the eigenvalues
+        kernel = torch.ones((channel_dim, 1, 3, 3, 3), dtype=torch.float16).to("cuda")
+        gt_dil = torch.clamp(torch.nn.functional.conv3d(target.type(torch.float16), kernel, padding=1, groups=channel_dim),
+                             0, 1)
+        for v in range(1, channel_dim):
+            gt = gt_dil[:, v, :, :, :]
+            gt_dilate = gt.detach()
+            #verify is the batch is not all empty patches for that structure
+            wt = torch.sum(target[:, v]).detach()
+            if wt != 0:
+                for p in range(p_range):  #deep supervision
+                    out = output[p].clone() + 1e-20
+                    if p==0:
+                        loss_v, eigentrue = vesselness_calc(out[:, v], target[:, v], gt_dilate, sigma, gt)
+                        if flag == 0:
+                            loss_vessel = w[p] * loss_v
+                            flag = 1
+                        else:
+                            loss_vessel += w[p] * loss_v
+                    else: #we avoid to recalculate the eigenvals of the target (they do not change)
+                        loss_v, _ = vesselness_calc(out[:, v], target[:, v], gt_dilate, sigma-(sigma//5*p), gt, deep=eigentrue)
+                        loss_vessel += w[p] * loss_v
+            else:
+                if flag == 0:
+                    loss_vessel = torch.sum(out[:, v]*0.0) #loss to 0 for that structure without breaking the graph
+                    flag = 1
+                else:
+                    loss_vessel += torch.sum(out[:, v] * 0.0)  # loss to 0 for that structure without breaking the graph
+    else:
+        for v in range(1, channel_dim):
+            #selecting just the not empty patches
+            ww = torch.sum(target[:, v], dim=(1, 2, 3)) > 0
+            wt = ww.detach()
+            #verify is the batch is not all empty patches for that structure
+            wwt = torch.sum(target[:, v]).detach()
+            if wwt != 0:
+                for p in range(p_range):  # deep supervision
+                    out = output[p].clone() + 1e-20
+                    if p == 0:
+                        loss_v, eigentrue = vesselness_calc(out[:, v], target[:, v], wt, sigma, gt)
+                        if flag == 0:
+                            loss_vessel = w[p] * loss_v
+                            flag = 1
+                        else:
+                            loss_vessel += w[p] * loss_v
+                    else:  # we avoid to recalculate the eigenvals of the target (they do not change)
+                        loss_v, _ = vesselness_calc(out[:, v], target[:, v], wt, sigma - (sigma // 5 * p), gt,
+                                                    deep=eigentrue)
+                        loss_vessel += w[p] * loss_v
+            else:
+                if flag == 0:
+                    loss_vessel = torch.sum(out[:, v] * 0.0)  # loss to 0 for that structure without breaking the graph
+                    flag = 1
+                else:
+                    loss_vessel += torch.sum(out[:, v] * 0.0)  # loss to 0 for that structure without breaking the graph
 
-    eigenvalues = torch.take_along_dim(eigenv, indices, dim=1)
-    F_loss = torch.mean(1 - frangi(eigenvalues))
+    return (1/(channel_dim-1))*loss_vessel
 
-    return F_loss
+def fvloss(output,target,sigma=25, alpha=0.1,beta=0.5,gamma=5):
+    '''
+    Loss function to force prediction of elongated structures as in Frangi’s vesselness function,
+    and thus named Frangi’s vesselness loss function FvLoss.
+    Default for Frangi are alpha=0.1,beta=0.5,gamma=5.
+
+    output: predictions at different level of resolution (list of prediction BxCxHxWxD), if you do not use deep supervision
+            you need to pass this argument, i.e. your output prediction BxCxHxWxD, as msloss([output],target,sigma)
+    target: reference segmentation (BxCxHxWxD)
+
+    sigma = maximum standard deviations for Hessian matrix, we apply 5 different Gaussian kernel from 1 to sigma. Default sigma=25
+    '''
+
+    flag = 0
+    channel_dim = target.size()[1]
+    p_range = len(output)
+    w = np.array([1 / (2 ** i) for i in range(p_range)])
+    w = w / w.sum()
+
+    for v in range(1, channel_dim):
+        # verify is the batch is not all empty patches for that structure
+        wwt = torch.sum(target[:, v]).detach()
+        if wwt != 0:
+            for p in range(p_range):  # deep supervision
+                out = output[p].clone() + 1e-20
+                if p == 0:
+                    eigenv = eigen_hessian_matrix(out[:, v], target[:, v], sigma)
+                    _, indices = torch.abs(eigenv).sort(dim=1, stable=True)
+                    eigenvalues = torch.take_along_dim(eigenv, indices, dim=1)
+                    loss_v = torch.mean(1 - frangi(eigenvalues,alpha,beta,gamma))
+                    if flag == 0:
+                        loss_vessel = w[p] * loss_v
+                        flag = 1
+                    else:
+                        loss_vessel += w[p] * loss_v
+                else:
+                    eigenv = eigen_hessian_matrix(out[:, v], target[:, v],  sigma - (sigma // 5 * p))
+                    _, indices = torch.abs(eigenv).sort(dim=1, stable=True)
+                    eigenvalues = torch.take_along_dim(eigenv, indices, dim=1)
+                    loss_v = torch.mean(1 - frangi(eigenvalues,alpha,beta,gamma))
+                    loss_vessel += w[p] * loss_v
+        else:
+            if flag == 0:
+                loss_vessel = torch.sum(out[:, v] * 0.0)  # loss to 0 for that structure without breaking the graph
+                flag = 1
+            else:
+                loss_vessel += torch.sum(out[:, v] * 0.0)  # loss to 0 for that structure without breaking the graph
 
 
+
+    return (1/(channel_dim-1))*loss_vessel
