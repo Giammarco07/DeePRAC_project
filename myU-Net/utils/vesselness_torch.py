@@ -263,8 +263,8 @@ def msloss(output,target,sigma=25,gt=True):
         gt_dil = torch.clamp(torch.nn.functional.conv3d(target.type(torch.float16), kernel, padding=1, groups=channel_dim),
                              0, 1)
         for v in range(1, channel_dim):
-            gt = gt_dil[:, v, :, :, :]
-            gt_dilate = gt.detach()
+            gt_ = gt_dil[:, v, :, :, :]
+            gt_dilate = gt_.detach()
             #verify is the batch is not all empty patches for that structure
             wt = torch.sum(target[:, v]).detach()
             if wt != 0:
