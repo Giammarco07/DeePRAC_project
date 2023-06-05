@@ -166,6 +166,8 @@ def vesselness_calc(pred, target, ref, sigma, gt, l = 'L2', deep = None):
     if deep is None:
         eigenv_tr = eigen_hessian_matrix(target, ref, sigma, gt)
         eigenvtrue = eigenv_tr.detach()
+    else:
+        eigenvtrue = deep
     eigenv = eigen_hessian_matrix(pred, ref, sigma, gt)
     if l=='L2':
         loss = L2(eigenv, eigenvtrue)
