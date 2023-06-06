@@ -284,10 +284,10 @@ def msloss(output,target,sigma=25,gt=True):
                         loss_vessel += w[p] * loss_v
             else:
                 if flag == 0:
-                    loss_vessel = torch.sum(output[p][:, v]*0.0) #loss to 0 for that structure without breaking the graph
+                    loss_vessel = torch.sum(output[0][:, v]*0.0) #loss to 0 for that structure without breaking the graph
                     flag = 1
                 else:
-                    loss_vessel += torch.sum(output[p][:, v] * 0.0)  # loss to 0 for that structure without breaking the graph
+                    loss_vessel += torch.sum(output[0][:, v] * 0.0)  # loss to 0 for that structure without breaking the graph
     else:
         for v in range(1, channel_dim):
             #selecting just the not empty patches
@@ -311,10 +311,10 @@ def msloss(output,target,sigma=25,gt=True):
                         loss_vessel += w[p] * loss_v
             else:
                 if flag == 0:
-                    loss_vessel = torch.sum(out[:, v] * 0.0)  # loss to 0 for that structure without breaking the graph
+                    loss_vessel = torch.sum(output[0][:, v] * 0.0)  # loss to 0 for that structure without breaking the graph
                     flag = 1
                 else:
-                    loss_vessel += torch.sum(out[:, v] * 0.0)  # loss to 0 for that structure without breaking the graph
+                    loss_vessel += torch.sum(output[0][:, v] * 0.0)  # loss to 0 for that structure without breaking the graph
 
     return (1/(channel_dim-1))*loss_vessel
 
