@@ -5,7 +5,7 @@ import torch.utils.data
 from pathlib import Path
 import numpy as np
 import torchvision
-from Networks import UNet2D, UNet3D,STN_CROP, STN, VNet3D, STN3D, ResNet3D, Modified_VGG16, PNet3D, REDCNN, RetinaNet
+from Networks import UNet2D, UNet3D,STN_CROP, STN, VNet3D, STN3D, ResNet3D, Modified_VGG16, PNet3D, REDCNN, RetinaNet, TopNet
 from utils.Loader import get_image_file, get_image_file_2, get_image_file_3, get_image_file_4
 from Dataset import Prepare_Dataset, Prepare_Dataset_train, Prepare_Dataset_val
 from Train_and_Test import Training, Testing, Training_new
@@ -210,7 +210,7 @@ print(task)
 #endregion
 
 #region Folders and patch_size definition
-if input =='children' and (network=='nnunet3D' or network=='pnet3D' or network=='p-nnunet3D'):
+if input =='children' and (network=='nnunet3D' or network=='pnet3D' or network=='p-nnunet3D' or network=='TopNet'):
     if mode=='train':
       if (task == 'Task208_NECKER' or task == 'Task308_NECKER' or task == 'Task202_NECKER' or task == 'Task302_NECKER') and skel:
         data_path = Path(path + '/nnUNet_preprocessed/'+task+'/nnUNetData_plans_v2.1_stage1/Patches_perp_3D2_new')
@@ -335,6 +335,8 @@ if input =='children' and network=='nnunet3D':
         #net = UNet3D.net_Dense3(args.ngpu, channel_dim, use_bias=use_bias).to(device)
     else:
         net = UNet3D.net_new(args.ngpu,channel_dim, use_bias=use_bias, in_c = in_c).to(device)
+elif input=='children' and network=='TopNet':
+    net = TopNet.net(args.ngpu).to(device)
 elif input=='children' and network=='pnet3D':
     net = PNet3D.net_64(use_bias=use_bias, in_c = 1).to(device)
 elif input=='children' and network=='p-nnunet3D':
@@ -450,7 +452,7 @@ if mode=='train':
 
 #region Number of training epochs
 if mode == 'train':
-    if network == 'nnunet3D':
+    if network == 'nnunet3D' or network== 'TopNet':
         n_images_seen_nnunet = 500 * epochs
     elif network == 'pnet3D':
         n_images_seen_nnunet = 1000 * epochs
@@ -460,7 +462,7 @@ if mode == 'train':
         n_images_seen_nnunet = 3000 * epochs
     num_images_per_epoch = num * 2
     if num_images_per_epoch>=500 and asnnunet==True:
-        if (network == 'nnunet3D' or network == 'pnet3D'):
+        if (network == 'nnunet3D' or network == 'pnet3D'  or network== 'TopNet'):
             n_iter = 500//batch_size
             print('WARNING! Training as nnunet ', str(n_iter),' iterations with batch ', str(batch_size), 'and 1000 epochs: 500.000 iterations')
             num_epochs = epochs
@@ -521,7 +523,7 @@ if args.continue_training and mode=='train':
     else:
         best_dicestn2 = 0
 
-    if network=='nnunet3D' or network=='redcnn':
+    if network=='nnunet3D' or network=='redcnn'  or network== 'TopNet':
         net.load_state_dict(torch.load(data_results + '/net_3d.pth'))
         nets.append(net)
         if dda:
@@ -656,7 +658,7 @@ else:
     best_dicestn2 = 0
     start_epoch = 0
     val_step=0
-    if network=='nnunet3D' or network == 'pnet3D' or network=='redcnn':
+    if network=='nnunet3D' or network == 'pnet3D' or network=='redcnn'  or network== 'TopNet':
         if dda:
             early_stopping = num_epochs
         else:
@@ -705,7 +707,7 @@ else:
 import torch.optim as optim
 if mode=='train':
     optimizers = []
-    if network == 'nnunet3D' or network == 'nnunet2D' or network=='nnunet2.5D' or network=='redcnn':
+    if network == 'nnunet3D' or network == 'nnunet2D' or network=='nnunet2.5D' or network=='redcnn'  or network== 'TopNet':
         lr = lr * ((1 - (start_epoch / num_epochs)) ** 0.9)
         optimizer = optim.SGD(net.parameters(), lr=lr, weight_decay=3e-5, momentum=0.99, nesterov=True)
         for state in optimizer.state.values():

@@ -1,3 +1,5 @@
+from __future__ import division
+
 import numpy as np
 import torch
 import sys
@@ -357,3 +359,35 @@ ce = torch.nn.NLLLoss().to(device='cuda')
 L2 = torch.nn.MSELoss().to(device='cuda')
 
 L1 = torch.nn.L1Loss().to(device='cuda')
+
+L1smooth = torch.nn.SmoothL1Loss().to(device='cuda')
+
+def c_loss(pred,target,seg_vessels):
+    loss = torch.where(torch.abs(target-pred)<1,0.5*((target-pred)**2),torch.abs(target-pred)-0.5)
+    loss = loss / (target**2)
+
+    return torch.mean(loss[seg_vessels==1])
+
+def top_loss(pred,seg,center_vessels, r=15, K=3,alpha=1/15,gamma=1/3):
+    grid = torch.stack(torch.meshgrid(torch.arange(pred.size()[-3]), torch.arange(pred.size()[-2]), torch.arange(pred.size()[-1])), dim=-1)
+    dist = torch.zeros((pred.size()[-3],pred.size()[-2],pred.size()[-1]))
+    l = 0.
+    n = 0
+    for pos in torch.nonzero(center_vessels.squeeze(1)):
+        for g in grid:
+            dist[g] = (pos[0] - g).pow(2).sum().sqrt()
+        dist[dist>r] = 0
+        for d in torch.nonzero(dist):
+            d_ = [pos[0],d[0],d[1],d[2]]
+            if d_ == pos:
+                continue
+            else:
+                if seg[d_]==seg[pos]:
+                    l += L1smooth(L2(pred[pos[0],:,pos[2],pos[3],pos[4]],pred[pos[0],:,d[0],d[1],d[2]]),alpha*dist[d])
+                    n += 1
+                else:
+                    l += gamma*(K-L2(pred[pos[0],:,pos[2],pos[3],pos[4]],pred[pos[0],:,d[0],d[1],d[2]]))
+                    n += 1
+
+    return l/n
+
