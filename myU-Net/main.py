@@ -5,7 +5,7 @@ import torch.utils.data
 from pathlib import Path
 import numpy as np
 import torchvision
-from Networks import UNet2D, UNet3D,STN_CROP, STN, VNet3D, STN3D, ResNet3D, Modified_VGG16, PNet3D, REDCNN, RetinaNet, TopNet
+from Networks import UNet2D, UNet3D,STN_CROP, STN, VNet3D, STN3D, ResNet3D, Modified_VGG16, PNet3D, REDCNN, TopNet
 from utils.Loader import get_image_file, get_image_file_2, get_image_file_3, get_image_file_4
 from Dataset import Prepare_Dataset, Prepare_Dataset_train, Prepare_Dataset_val
 from Train_and_Test import Training, Testing, Training_new
@@ -374,8 +374,6 @@ elif network == 'stnpose3D':
     net = STN3D.net(args.ngpu, 2, patch_size, mode='rotation_translation_scale').to(device)
 elif network == 'stncrop3D':
     net = STN_CROP.net3D_new(args.ngpu, 1, patch_size).to(device)
-elif network == 'nnDet':
-    net = RetinaNet.net(patch_size).to(device)
 elif network == 'stnposecrop3D':
     net1 = STN3D.net(args.ngpu, 2, patch_size, mode='rotation_translation_scale').to(device)
     net2 = STN_CROP.net3D_new(args.ngpu, 1, patch_size).to(device)
