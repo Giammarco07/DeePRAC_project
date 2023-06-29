@@ -19,6 +19,11 @@ def Training(path, network,nets,optimizers,learning,lr,channel_dim, train_loader
                                     learning, lr,
                                     train_loader, val_loader, data_results, massimo, minimo, supervision, device,
                                     asnnunet, mode=None, log=False)
+    elif network == 'DVAE':
+        Train_Networks.dvae.train(start_epoch, num_epochs, best_dice, val_step, early_stopping, nets, optimizers,
+                                      learning, lr, channel_dim, train_loader, val_loader, data_results, massimo, minimo, supervision,
+                                      device, asnnunet, mode=None, log=False)
+
 
     elif network == 'stnpose':
         Train_Networks.stn.train_stnpose(learning, path, start_epoch, num_epochs, best_dice, best_dicestn, val_step,
@@ -116,6 +121,11 @@ def Testing(task,input_folder,  patch_size, batch_size, workers, network, nets, 
         Test_Networks.pnnunet3d.test(input_folder, patch_size, batch_size, workers, network, nets, channel_dim,
                                      label_path, test_data_path, data_results, massimo, minimo, tta, res, preprocessing,
                                      device, rsz, do_seg=False)
+    elif network=='DVAE':
+        Test_Networks.dvae.test(input_folder, patch_size, batch_size, workers, network, nets, channel_dim, in_c,
+                                    label_path, test_data_path, data_results, massimo, minimo, tta, res, preprocessing,
+                                    device, rsz, supervision, do_seg=False)
+
 
 
     elif network == 'stnpose':

@@ -5,7 +5,7 @@ import torch.utils.data
 from pathlib import Path
 import numpy as np
 import torchvision
-from Networks import UNet2D, UNet3D,STN_CROP, STN, VNet3D, STN3D, ResNet3D, Modified_VGG16, PNet3D, REDCNN, TopNet
+from Networks import UNet2D, UNet3D,STN_CROP, STN, VNet3D, STN3D, ResNet3D, Modified_VGG16, PNet3D, REDCNN, TopNet, DVAE
 from utils.Loader import get_image_file, get_image_file_2, get_image_file_3, get_image_file_4
 from Dataset import Prepare_Dataset, Prepare_Dataset_train, Prepare_Dataset_val
 from Train_and_Test import Training, Testing, Training_new
@@ -89,7 +89,7 @@ lr = float(args.lr)
 epochs = int(args.num_epochs)
 min_pix = int(args.min_pix)
 #path = str(os.getcwd())
-path = '/tsi/clusterhome/glabarbera/unet3d'
+path = '/home/infres/glabarbera/nnunet'
 
 data_results = args.results_folder
 if os.path.exists(data_results)==False:
@@ -210,14 +210,14 @@ print(task)
 #endregion
 
 #region Folders and patch_size definition
-if input =='children' and (network=='nnunet3D' or network=='pnet3D' or network=='p-nnunet3D' or network=='TopNet'):
+if input =='children' and (network=='nnunet3D' or network=='pnet3D' or network=='p-nnunet3D' or network=='TopNet' or network=='DVAE'):
     if mode=='train':
       if (task == 'Task208_NECKER' or task == 'Task308_NECKER' or task == 'Task202_NECKER' or task == 'Task302_NECKER') and skel:
         data_path = Path(path + '/nnUNet_preprocessed/'+task+'/nnUNetData_plans_v2.1_stage1/Patches_perp_3D2_new')
       elif (task == 'Task208_NECKER' or task == 'Task308_NECKER' or task == 'Task202_NECKER' or task == 'Task302_NECKER') and not skel and not args.transferskel and network=='pnet3D':
       	data_path = Path(path + '/nnUNet_preprocessed/'+task+'/nnUNetData_plans_v2.1_stage1/Patches64_2_all_new')
       elif (task == 'Task208_NECKER' or task == 'Task209_NECKER' or task == 'Task202_NECKER' or task == 'Task302_NECKER') and not skel and not args.transferskel:
-      	data_path = Path(path + '/nnUNet_preprocessed/'+task+'/nnUNetData_plans_v2.1_stage1/Patches') #160') #64_2')
+      	data_path = Path(path + '/nnUNet_preprocessed/'+task+'/nnUNetData_plans_v2.1_stage1/Patches160') #160') #64_2')
       elif task == 'Task308_NECKER' and not skel and not args.transferskel:
       	data_path = Path(path + '/nnUNet_preprocessed/'+task+'/nnUNetData_plans_v2.1_stage1_affine/Patches') #160') #64_2')
       elif (task == 'Task208_NECKER' or task == 'Task308_NECKER' or task == 'Task202_NECKER' or task == 'Task302_NECKER') and not skel and args.transferskel:
@@ -337,6 +337,9 @@ if input =='children' and network=='nnunet3D':
         net = UNet3D.net_new(args.ngpu,channel_dim, use_bias=use_bias, in_c = in_c).to(device)
 elif input=='children' and network=='TopNet':
     net = TopNet.net(args.ngpu).to(device)
+elif input=='children' and network=='DVAE':
+    net1 = UNet3D.net_new(args.ngpu,channel_dim, use_bias=use_bias, in_c = in_c).to(device)
+    net2 = DVAE.net(100).to(device)
 elif input=='children' and network=='pnet3D':
     net = PNet3D.net_64(use_bias=use_bias, in_c = 1).to(device)
 elif input=='children' and network=='p-nnunet3D':
@@ -450,7 +453,7 @@ if mode=='train':
 
 #region Number of training epochs
 if mode == 'train':
-    if network == 'nnunet3D' or network== 'TopNet':
+    if network == 'nnunet3D' or network== 'TopNet' or network== 'DVAE':
         n_images_seen_nnunet = 500 * epochs
     elif network == 'pnet3D':
         n_images_seen_nnunet = 1000 * epochs
@@ -460,7 +463,7 @@ if mode == 'train':
         n_images_seen_nnunet = 3000 * epochs
     num_images_per_epoch = num * 2
     if num_images_per_epoch>=500 and asnnunet==True:
-        if (network == 'nnunet3D' or network == 'pnet3D'  or network== 'TopNet'):
+        if (network == 'nnunet3D' or network == 'pnet3D'  or network== 'TopNet'  or network== 'DVAE'):
             n_iter = 500//batch_size
             print('WARNING! Training as nnunet ', str(n_iter),' iterations with batch ', str(batch_size), 'and 1000 epochs: 500.000 iterations')
             num_epochs = epochs
@@ -554,7 +557,7 @@ if args.continue_training and mode=='train':
         nets.append(net)
         val_step = int(start_epoch / 25) + 1
 
-    elif network=='stnposecrop' or network=='stnposecrop3D' or network == 'stnposefaster-rcnn':
+    elif network=='stnposecrop' or network=='stnposecrop3D' or network == 'stnposefaster-rcnn' or network== 'DVAE':
         net2.load_state_dict(torch.load(data_results + '/net_1.pth'))
         early_stopping = num_epochs
         nets.append(net1)
@@ -680,7 +683,7 @@ else:
         nets.append(net1)
         nets.append(net2)
         num_epochs += 50
-    elif network == 'stnposennunet2D' or network == 'stnposecrop3D':
+    elif network == 'stnposennunet2D' or network == 'stnposecrop3D'  or network== 'DVAE':
         early_stopping = int(num_epochs / 2)
         nets.append(net1)
         nets.append(net2)
@@ -746,7 +749,7 @@ if mode=='train':
             optimizer.load_state_dict(torch.load(data_results + '/optimizer.pth'))
         optimizers.append(optimizer)
 
-    elif network=='stnposennunet2D':
+    elif network=='stnposennunet2D' or network== 'DVAE':
         lr = lr * ((1 - (start_epoch / num_epochs)) ** 0.9)
         optimizer = optim.SGD(net2.parameters(), lr=lr, weight_decay=3e-5, momentum=0.99, nesterov=True)
         for state in optimizer.state.values():
