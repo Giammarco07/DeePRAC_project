@@ -1,10 +1,9 @@
 import torch.nn as nn
 import torch
 
-
-class DVAE(nn.Module):
+class net(nn.Module):
     def __init__(self, zdim):
-        super().__init__()
+        super(net, self).__init__()
 
         self.relu = nn.ReLU()
         self.softmax = nn.Softmax(dim=1)
@@ -13,7 +12,7 @@ class DVAE(nn.Module):
                                     stride=2,
                                     padding=0)
 
-        self.enc_l1 = nn.Conv3d(1, 64, 3, stride=1, padding=1, dilation=1)
+        self.enc_l1 = nn.Conv3d(2, 64, 3, stride=1, padding=1, dilation=1)
         self.enc_l2 = nn.Conv3d(64, 64, 3, stride=1, padding=1, dilation=1)
         self.enc_l3 = nn.Conv3d(64, 256, 3, stride=1, padding=1, dilation=1)
         self.enc_l4 = nn.Conv3d(256, 256, 3, stride=1, padding=1, dilation=1)
@@ -24,7 +23,7 @@ class DVAE(nn.Module):
         self.dec_l2 = nn.ConvTranspose3d(256, 256, 4, stride=2, padding=1, output_padding=0)
         self.dec_l3 = nn.ConvTranspose3d(256, 64, 4, stride=2, padding=1, output_padding=0)
         self.dec_l4 = nn.Conv3d(64, 64, 3, stride=1, padding=1, dilation=1)
-        self.dec_l5 = nn.Conv3d(64, 3, 3, stride=1, padding=1, dilation=1)
+        self.dec_l5 = nn.Conv3d(64, 2, 3, stride=1, padding=1, dilation=1)
 
     def encode(self, x):
         enc_h1 = self.relu(self.enc_l1(x))

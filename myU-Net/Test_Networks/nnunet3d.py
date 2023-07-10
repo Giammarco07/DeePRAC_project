@@ -119,7 +119,7 @@ def test(input_folder, patch_size, batch_size, workers, network, nets, channel_d
         pred_3d = np.zeros((channel_dim, imgshape[-3], imgshape[-2], imgshape[-1]), dtype=np.float32)
         # art_3d = np.zeros((1, imgshape[0], imgshape[1], imgshape[2]), dtype=np.float32)
         # ven_3d = np.zeros((1, imgshape[0], imgshape[1], imgshape[2]), dtype=np.float32)
-        if network == 'nnunet3D':
+        if network == 'nnunet3D' or network == 'topnet':
             if do_seg:
                 test_loader = Prepare_Test_Data_new(patch_ids, x_, in_c, patch_size[0], patch_size[1], patch_size[2],
                                                     batch_size,

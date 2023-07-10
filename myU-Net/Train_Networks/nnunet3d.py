@@ -14,9 +14,8 @@ import pylab as plt
 import time
 import sys
 ee = sys.float_info.epsilon
-from skimage.morphology import skeletonize
 from utils.figures import np_to_img
-from utils.losses import fnr,ce, soft_dice_loss, dice_loss, soft_dice_loss_old,soft_dice_loss_batch, soft_dice_loss_old_new, dice_loss_val_new, compute_dtm, compute_ddt, L1, bce, general_dice_loss_batch, c_loss, top_loss
+from utils.losses import fnr,ce, soft_dice_loss, dice_loss, soft_dice_loss_old,soft_dice_loss_batch, soft_dice_loss_old_new, dice_loss_val_new, compute_dtm, compute_ddt, L1, bce, general_dice_loss_batch, c_loss, top_loss, compute_center_dtm
 from utils.vesselness_torch import vesselness_frangi_ssvmd, vesselness_jerman_ssvmd, msloss, fvloss
 from Test_Networks.nnunet3d import val
 
@@ -102,8 +101,8 @@ def train(start_epoch, num_epochs, best_dice, val_step, early_stopping, nets, op
                 rand = torch.randperm(image.size()[0])
                 image = image[rand]
                 target = target[rand]
-                image = image.to(device)
-                target = target.to(device)
+                image = image.to(device, non_blocking=True)
+                target = target.to(device, non_blocking=True)
                     
                 seg = torch.argmax(target, dim=1)
                 batch = image.size()[0]                    
@@ -116,7 +115,7 @@ def train(start_epoch, num_epochs, best_dice, val_step, early_stopping, nets, op
                     print(f'Before forward pass - Cuda memory allocated: {torch.cuda.memory_allocated() / 1e9}')
                     print(f'Before forward pass - Cuda memory cached: {torch.cuda.memory_cached() / 1e9}')
 
-                optimizer.zero_grad()
+                optimizer.zero_grad(set_to_none=True)
                 with amp2.autocast():
                     output = net(image)
 
@@ -387,16 +386,20 @@ def train(start_epoch, num_epochs, best_dice, val_step, early_stopping, nets, op
                         loss_ce = ce(torch.log(out), seg)
                         loss_G_joint = loss_ce + loss_dice
                     elif supervision == 'topnet':
+
                         with torch.no_grad():
-                            seg_vessels = seg.unsqueeze(1).bool().int()
-                            tgt = torch.nn.functional.one_hot(seg_vessels, num_classes=2)
-                            center_vessels = skeletonize(seg_vessels.cpu().numpy())
-                            gt_dis = compute_dtm(1-center_vessels, center_vessels.shape)
-                            gt_dis = torch.from_numpy(gt_dis).float().to(device)
+                            seg_vessels = seg.unsqueeze(1).bool().long()
+                            tgt = torch.moveaxis(torch.nn.functional.one_hot(seg_vessels.squeeze(1), num_classes=2),-1,1)
+                            gt_dis, center_vessels = compute_center_dtm(seg_vessels.cpu().numpy(), seg_vessels.shape)
+                            gt_dis = torch.from_numpy(gt_dis).float().to(device, non_blocking=True)
+                            center_vessels = torch.from_numpy(center_vessels).float().to(device, non_blocking=True)
+
                         loss_dice = soft_dice_loss_batch(output[0], tgt)
                         loss_c = c_loss(output[1],gt_dis,seg_vessels)
                         loss_top = top_loss(output[2],seg,center_vessels)
+
                         loss_G_joint = loss_dice + loss_c + loss_top
+                        # V_losses.append(loss_top.item())
                     else: #example supervision == 'dense'
                         out = output[0].clone() + 1e-20
                         loss_dice = -torch.log(soft_dice_loss(out, target))
@@ -563,6 +566,7 @@ def train(start_epoch, num_epochs, best_dice, val_step, early_stopping, nets, op
                 d = loss_dice.item()
                 v = loss_top.item()
                 del loss_G_joint, loss_c, loss_dice, loss_top
+                torch.cuda.empty_cache()
             else:
                 c = loss_ce.item()
                 d = loss_dice.item()
@@ -640,8 +644,8 @@ def train(start_epoch, num_epochs, best_dice, val_step, early_stopping, nets, op
 
                 if supervision=='topnet':
                     val_seg = torch.argmax(val_target, dim=1)
-                    val_seg_vessels = val_seg.unsqueeze(1).bool().int()
-                    val_target = torch.nn.functional.one_hot(val_seg_vessels, num_classes=2)
+                    val_seg_vessels = val_seg.bool().long()
+                    val_target = torch.moveaxis(torch.nn.functional.one_hot(val_seg_vessels, num_classes=2), -1, 1)
 
                 val_dice = 1 - soft_dice_loss_batch(pred, val_target)
                 dices.append(val_dice.item())

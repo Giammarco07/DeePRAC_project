@@ -339,7 +339,7 @@ elif input=='children' and network=='TopNet':
     net = TopNet.net(args.ngpu).to(device)
 elif input=='children' and network=='DVAE':
     net1 = UNet3D.net_new(args.ngpu,channel_dim, use_bias=use_bias, in_c = in_c).to(device)
-    net2 = DVAE.net(100).to(device)
+    net2 = DVAE.net(1000).to(device)
 elif input=='children' and network=='pnet3D':
     net = PNet3D.net_64(use_bias=use_bias, in_c = 1).to(device)
 elif input=='children' and network=='p-nnunet3D':

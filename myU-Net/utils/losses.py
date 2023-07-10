@@ -5,6 +5,7 @@ import torch
 import sys
 ee = sys.float_info.epsilon
 smooth = 1e-5
+from skimage.morphology import skeletonize
 
 def dice(input, target):
 
@@ -360,34 +361,112 @@ L2 = torch.nn.MSELoss().to(device='cuda')
 
 L1 = torch.nn.L1Loss().to(device='cuda')
 
-L1smooth = torch.nn.SmoothL1Loss().to(device='cuda')
+L1smooth = torch.nn.SmoothL1Loss(reduction='none').to(device='cuda')
+
+def compute_center_dtm(img_gt, out_shape):
+    from scipy.ndimage import distance_transform_edt as distance
+    """
+    compute the distance transform map of foreground in binary mask
+    input: segmentation, shape = (batch_size, c, x, y, z)
+    output: the foreground Distance Map (SDM) 
+    dtm(x) = 0; x in segmentation boundary
+             inf|x-y|; x in segmentation
+    """
+
+    fg_dtm = np.zeros(out_shape)
+    center_vessels = np.zeros(out_shape)
+    for b in range(out_shape[0]): # batch size
+        for c in range(out_shape[1]):
+            posmask = img_gt[b][c].astype(np.bool)
+            if posmask.any():
+                center_vessels[b][c] = skeletonize(posmask)
+                posdis = distance(1-center_vessels[b][c])
+                fg_dtm[b][c] = np.rint(posdis)
+
+    return fg_dtm, center_vessels
 
 def c_loss(pred,target,seg_vessels):
     loss = torch.where(torch.abs(target-pred)<1,0.5*((target-pred)**2),torch.abs(target-pred)-0.5)
-    loss = loss / (target**2)
+    loss = loss / (target**2 + ee)
+    loss[seg_vessels==0] = 0
+    loss = torch.sum(loss,dim=(1,2,3,4))/(torch.count_nonzero(seg_vessels,dim=(1,2,3,4))+ee)
+    return torch.mean(loss)
 
-    return torch.mean(loss[seg_vessels==1])
+def combinator(*args):
+    """
+    Fast triplet computation method
+    :param args: maximum values for every column
+    :return: list of triplets
+    """
+    args = list(args)
+    n = args.pop()
+    cur = np.arange(n)
+    cur = cur[:, None]
+
+    while args:
+        d = args.pop()
+        cur = np.kron(np.ones((d, 1)), cur)
+        front = np.arange(d).repeat(n)[:, None]
+        cur = np.column_stack((front, cur))
+        n *= d
+
+    return cur
 
 def top_loss(pred,seg,center_vessels, r=15, K=3,alpha=1/15,gamma=1/3):
-    grid = torch.stack(torch.meshgrid(torch.arange(pred.size()[-3]), torch.arange(pred.size()[-2]), torch.arange(pred.size()[-1])), dim=-1)
-    dist = torch.zeros((pred.size()[-3],pred.size()[-2],pred.size()[-1]))
-    l = 0.
-    n = 0
+    grid = (torch.from_numpy(combinator(pred.size()[-3], pred.size()[-2], pred.size()[-1]).astype(int)).to(device='cuda', non_blocking=True)).view(pred.size()[-3], pred.size()[-2], pred.size()[-1],3)
+    l = torch.tensor(0. + ee).to(device='cuda', non_blocking=True)
+    n = torch.tensor(smooth).to(device='cuda', non_blocking=True)
+
     for pos in torch.nonzero(center_vessels.squeeze(1)):
-        for g in grid:
-            dist[g] = (pos[0] - g).pow(2).sum().sqrt()
-        dist[dist>r] = 0
-        for d in torch.nonzero(dist):
-            d_ = [pos[0],d[0],d[1],d[2]]
-            if d_ == pos:
-                continue
-            else:
-                if seg[d_]==seg[pos]:
-                    l += L1smooth(L2(pred[pos[0],:,pos[2],pos[3],pos[4]],pred[pos[0],:,d[0],d[1],d[2]]),alpha*dist[d])
-                    n += 1
-                else:
-                    l += gamma*(K-L2(pred[pos[0],:,pos[2],pos[3],pos[4]],pred[pos[0],:,d[0],d[1],d[2]]))
-                    n += 1
+        minz = torch.amax(torch.tensor([0,pos[1]-15]))
+        minx = torch.amax(torch.tensor([0, pos[2] - 15]))
+        miny = torch.amax(torch.tensor([0, pos[3] - 15]))
+        maxz = torch.amin(torch.tensor([pred.size()[-3]-1,pos[1]+15]))
+        maxx = torch.amin(torch.tensor([pred.size()[-2]-1, pos[2] + 15]))
+        maxy = torch.amin(torch.tensor([pred.size()[-1]-1, pos[3] + 15]))
+        p = pred[pos[0],:,minz:maxz,minx:maxx,miny:maxy]
+        s = seg[pos[0],minz:maxz,minx:maxx,miny:maxy]
+        d = (pos[None,None,None, 1:] - grid).pow(2).sum(-1).sqrt()
+        d[d>r] = 0
+        dist = d[minz:maxz,minx:maxx,miny:maxy]
+        dist[s==0] = 0
+        # print(f'Before loss pass - Cuda memory allocated: {torch.cuda.memory_allocated() / 1e9}')
+        # print(f'Before loss pass - Cuda memory cached: {torch.cuda.memory_cached() / 1e9}')
+        l += (torch.where(s==seg[tuple(pos)],L1smooth((p.moveaxis(0,-1)-pred[pos[0],:,pos[1],pos[2],pos[3]]).pow(2).mean(-1),alpha*dist), torch.clamp(gamma*(K-(p.moveaxis(0,-1)-pred[pos[0],:,pos[1],pos[2],pos[3]]).pow(2).mean(-1)),min=0.)))[dist!=0].sum()
+
+        n += torch.count_nonzero(dist)
+        # print(f'After loss pass - Cuda memory allocated: {torch.cuda.memory_allocated() / 1e9}')
+        # print(f'After loss pass - Cuda memory cached: {torch.cuda.memory_cached() / 1e9}')
+        # del p,s,dist
+
+    # for i in range(pred.size()[0]):
+    #     p = pred[i]
+    #     with torch.no_grad():
+    #         pos = torch.nonzero(center_vessels.squeeze(1)[i]).transpose(1,0).type(torch.uint8)
+    #         print(torch.count_nonzero(center_vessels[i]))
+    #         grid_n = grid.unsqueeze(-1).repeat(1,1,1,1,torch.count_nonzero(center_vessels[i])).type(torch.uint8)
+    #         s = seg[i]
+    #         dist = (pos[None, None, None, :,:] - grid_n).pow(2).sum(-2).sqrt()
+    #         dist[dist > r] = 0
+    #         dist[s == 0] = 0
+    #         index = torch.nonzero(center_vessels.squeeze(1)[i],as_tuple=True)
+    #     print(f'Before loss pass - Cuda memory allocated: {torch.cuda.memory_allocated() / 1e9}')
+    #     print(f'Before loss pass - Cuda memory cached: {torch.cuda.memory_cached() / 1e9}')
+    #     l += (dist.bool().int() * torch.where(s.unsqueeze(-1).repeat(1,1,1,torch.count_nonzero(center_vessels[i])) == s[index][None,None,None,:],
+    #                                           L1smooth((p.unsqueeze(-1).repeat(1,1,1,1,torch.count_nonzero(center_vessels[i])).moveaxis(0, -1) - p.moveaxis(0, -1)[index]).pow(2).mean(-1), alpha * dist).mean((0,1,2)),
+    #                                           gamma * (K - (p.unsqueeze(-1).repeat(1,1,1,1,torch.count_nonzero(center_vessels[i])).moveaxis(0, -1) - p.moveaxis(0, -1)[index]).pow(2).mean(-1)))).sum()
+    #     print(f'After loss pass - Cuda memory allocated: {torch.cuda.memory_allocated() / 1e9}')
+    #     print(f'After loss pass - Cuda memory cached: {torch.cuda.memory_cached() / 1e9}')
+    #     n += torch.count_nonzero(dist)
+    #     del p,s,dist, index, pos, grid_n
+
+        # torch.cuda.empty_cache()
+        # print(f'After del pass - Cuda memory allocated: {torch.cuda.memory_allocated() / 1e9}')
+        # print(f'After del pass - Cuda memory cached: {torch.cuda.memory_cached() / 1e9}')
+    # del grid
 
     return l/n
+
+
+
 

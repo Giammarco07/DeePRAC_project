@@ -20,7 +20,7 @@ from utils.losses import fnr,ce, soft_dice_loss, dice_loss, soft_dice_loss_old,s
 from utils.vesselness_torch import vesselness_frangi_ssvmd, vesselness_jerman_ssvmd, msloss, fvloss
 from Test_Networks.nnunet3d import val
 
-ce_w = torch.nn.NLLLoss([0.2,0.4,0.4]).to(device='cuda')
+ce_w = torch.nn.NLLLoss(torch.tensor([0.3,0.7]),reduction='none').to(device='cuda')
 
 def log_gaussian(x, mu, logvar):
     PI = mu.new([np.pi])
@@ -44,6 +44,10 @@ def train(start_epoch, num_epochs, best_dice, val_step, early_stopping, nets, op
     net1.load_state_dict(torch.load(data_results + '/net.pth'))
     net1.eval()
     net2 = nets[1]
+
+    channel_dim -= 1
+    print('channel dim:',channel_dim)
+
     #net.convblock1[0].weight.register_hook(lambda x: print('grad accumulated in convblock1'))
     optimizer = optimizers[0]
     num_p = sum(p.numel() for p in net2.parameters() if p.requires_grad)
@@ -85,9 +89,10 @@ def train(start_epoch, num_epochs, best_dice, val_step, early_stopping, nets, op
             if learning == 'autocast':
                 if (i % 1000) == 0:
                     print('Iteration: ', i)
-                torch.cuda.synchronize()
-                step1 = time.time()
+
                 if mode == 'debug':
+                    torch.cuda.synchronize()
+                    step1 = time.time()
                     if i == 0:
                         print("Load images (s):", step1 - step)
                     else:
@@ -104,11 +109,13 @@ def train(start_epoch, num_epochs, best_dice, val_step, early_stopping, nets, op
                 target = target.to(device)
                     
                 seg = torch.argmax(target, dim=1)
+                seg_vessels = seg.bool().long()
                 batch = image.size()[0]                    
 
-                torch.cuda.synchronize()
-                step2 = time.time()
+
                 if mode == 'debug':
+                    torch.cuda.synchronize()
+                    step2 = time.time()
                     print("Move images in gpu (s): ", step2 - step1)
 
                     print(f'Before forward pass - Cuda memory allocated: {torch.cuda.memory_allocated() / 1e9}')
@@ -117,19 +124,22 @@ def train(start_epoch, num_epochs, best_dice, val_step, early_stopping, nets, op
                 optimizer.zero_grad()
                 with amp2.autocast():
                     with torch.no_grad():
-                        output = net1(image)
-                    out, mu, logvar, z = net2(output[0])
+                        output = net1(image)[0]
+                        output[:,1] = output[:,1] + output[:,2]
+                        output = output[:,:2]
+                    out, mu, logvar, z = net2(output, 'training')
                     ref = out.clone() + 1e-20
 
                     log_q_z_x = log_gaussian(z, mu, logvar)
                     log_p_z = log_gaussian(z, z.new_zeros(z.shape), z.new_zeros(z.shape))
-                    log_p_x_z = -ce_w(torch.log(ref), seg)
+                    log_p_x_z = (-ce_w(torch.log(ref), seg_vessels)).view(batch,-1).mean(1)
 
-                    loss_G_joint = 1e-3 * (log_q_z_x - log_p_z) - log_p_x_z
+                    loss_G_joint = torch.mean(1e-3 * (log_q_z_x - log_p_z) - 100*log_p_x_z)
 
-                torch.cuda.synchronize()
-                step4 = time.time()
+
                 if mode == 'debug':
+                    torch.cuda.synchronize()
+                    step4 = time.time()
                     print("Loss step (s): ", step4 - step3)
                     print(f'Before backward pass - Cuda memory allocated: {torch.cuda.memory_allocated() / 1e9}')
                     print(f'Before backward pass - Cuda memory cached: {torch.cuda.memory_cached() / 1e9}')
@@ -150,9 +160,10 @@ def train(start_epoch, num_epochs, best_dice, val_step, early_stopping, nets, op
                 # Updates the scale for next iteration.
                 scaler.update()
 
-                torch.cuda.synchronize()
-                step5 = time.time()
+
                 if mode == 'debug':
+                    torch.cuda.synchronize()
+                    step5 = time.time()
                     print("backward step (s): ", step5 - step4)
                     print(f'After backward pass - Cuda memory allocated: {torch.cuda.memory_allocated() / 1e9}')
                     print(f'After backward pass - Cuda memory cached: {torch.cuda.memory_cached() / 1e9}')
@@ -190,7 +201,7 @@ def train(start_epoch, num_epochs, best_dice, val_step, early_stopping, nets, op
 
                 with torch.no_grad():
                     output = net1(image)
-                out, mu, logvar, z = net2(output[0])
+                out, mu, logvar, z = net2(output[0],'training')
                 ref = out.clone() + 1e-20
 
                 torch.cuda.synchronize()
@@ -203,9 +214,9 @@ def train(start_epoch, num_epochs, best_dice, val_step, early_stopping, nets, op
 
                 log_q_z_x = log_gaussian(z, mu, logvar)
                 log_p_z = log_gaussian(z, z.new_zeros(z.shape), z.new_zeros(z.shape))
-                log_p_x_z = -ce_w(torch.log(ref), seg)
+                log_p_x_z = (-ce_w(torch.log(ref), seg)).view(batch,-1).mean(1)
 
-                loss_G_joint = 1e-3 * (log_q_z_x - log_p_z) - log_p_x_z
+                loss_G_joint = torch.mean(1e-3 * (log_q_z_x - log_p_z) - log_p_x_z)
 
                 torch.cuda.synchronize()
                 step4 = time.time()
@@ -227,7 +238,7 @@ def train(start_epoch, num_epochs, best_dice, val_step, early_stopping, nets, op
 
             if i == 0 and (((val_step * 15) == epoch) or (epoch == (num_epochs - 1))):
                 target_ = torch.argmax(target, dim=1, keepdim=True)
-                pred_t = torch.argmax(output[0], dim=1, keepdim=True)
+                pred_t = torch.argmax(output, dim=1, keepdim=True)
                 ncols = 2 + image.size()[1]  # number of columns in final grid of images
                 nrows = image.size()[0]  # looking at all images takes some time
                 f, axes = plt.subplots(nrows, ncols, figsize=(20, 20 * nrows / ncols))
@@ -261,8 +272,8 @@ def train(start_epoch, num_epochs, best_dice, val_step, early_stopping, nets, op
 
             # Save Losses for plotting later
             G_losses.append(loss_G_joint.item())
-            c = log_p_z.item()
-            d = log_p_x_z.item()
+            d = torch.mean(log_q_z_x - log_p_z).item()
+            c = torch.mean(-log_p_x_z).item()
             del loss_G_joint, log_p_x_z, log_p_z, log_q_z_x
             torch.cuda.synchronize()
             step6 = time.time()
@@ -280,8 +291,8 @@ def train(start_epoch, num_epochs, best_dice, val_step, early_stopping, nets, op
 
         print('[%d/%d]\tLoss_G --> first batch:\t%.4f\t and last batch: \t%.4f (ce: \t%.4f + d: \t%.4f)'
               % ((epoch + 1), num_epochs, G_losses[0], G_losses[-1], c, d))
-        print('TRAINING (BEST AT 0) --> Average of batches of\t Loss_G: %.4f (of which Loss_V: %.4f)'
-              % (temp_meanG, np.mean(V_losses)))
+        print('TRAINING (BEST AT 0) --> Average of batches of\t Loss_G: %.4f'
+              % (temp_meanG))
 
         del G_losses,V_losses
 
@@ -309,19 +320,25 @@ def train(start_epoch, num_epochs, best_dice, val_step, early_stopping, nets, op
                 val_target = torch.cat((target0, target1), 0)
                 val_image = val_image.to(device)
                 val_target = val_target.to(device)
+                val_seg = torch.argmax(val_target, dim=1)
+                val_seg_vessels = val_seg.bool().long()
+                val_target = torch.moveaxis(torch.nn.functional.one_hot(val_seg_vessels, num_classes=2), -1, 1)
+
                 torch.cuda.synchronize()    
                 valstep1 = time.time()
                 #print("Loading time (s): ", valstep1 - valstep0)
                 if learning == 'autocast':
                     with amp2.autocast():
                         with torch.no_grad():
-                            predict = net1(val_image)
-                            pred, mu, logvar, z = net2(predict[0])
+                            predict = net1(val_image)[0]
+                            predict[:, 1] = predict[:, 1] + predict[:, 2]
+                            predict = predict[:, :2]
+                            pred, mu, logvar, z = net2(predict,'test')
 
                 else:
                     with torch.no_grad():
                         predict = net1(val_image)
-                        pred, mu, logvar, z = net2(predict[0])
+                        pred, mu, logvar, z = net2(predict[0],'test')
 
                 torch.cuda.synchronize()    
                 valstep2 = time.time()
