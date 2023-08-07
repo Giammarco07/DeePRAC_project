@@ -67,11 +67,11 @@ parser.add_argument('-t', "--target_folder", required=True, help="folder for sav
 
 args = parser.parse_args()
 pred_folder = args.pred_folder
-target_folder = 'unet3d/nnUNet_raw_data_base/nnUNet_raw_data/' + args.target_folder + '/labelsTs'
+target_folder = 'nnunet/nnUNet_raw_data_base/nnUNet_raw_data/' + args.target_folder + '/labelsTs'
 # path='E:/DeePRAC_PROJECT/DatabaseDEEPRAC/nnunet/nnUNet_raw_data_base/nnUNet_raw_data/Task200_NECKER/'
 # path='E:/DeePRAC_PROJECT/DatabaseONLINE/KiTS19Challenge/Task201_KiTS19/'
 # path='E:/Andrea/'
-path = '/tsi/clusterhome/glabarbera/'
+path = '/home/infres/glabarbera/'
 
 (_, _, filenames_target) = next(walk(path + target_folder))
 (_, _, filenames_pred) = next(walk(path + pred_folder))
@@ -208,19 +208,19 @@ for i in range(start,end):
         else:
             hdistancek = 1000
             #mcdk = 1000
-        #vp = vesselness(pred_kidney)
-        #vt =vesselness(target_kidney)
-        #vsgtk = np.mean(np.abs(vp[target_kidney==1]-vt[target_kidney==1]))
-        #print(vsgtk)
+        vp = vesselness(pred_kidney)
+        vt =vesselness(target_kidney)
+        vsgtk = np.mean(np.abs(vp[target_kidney==1]-vt[target_kidney==1]))
+        print(vsgtk)
         #vsk = np.mean(np.abs(vp-vt))
         #print(vsk)
         dicetotk[i] = kidney_dice
-        msetotk[i] = mserrork
+        #msetotk[i] = mserrork
         precisiontotk[i] = precisionk
         recalltotk[i] = recallk
         hdtotk[i] = hdistancek
         #mcdtotk[i] = mcdk
-        #vsgttotk[i] = vsgtk
+        vsgttotk[i] = vsgtk
         #vstotk[i] = vsk
 
 
@@ -241,16 +241,16 @@ for i in range(start,end):
         vt =vesselness(target_tumor)
         vsgtt = np.mean(np.abs(vp[target_tumor==1]-vt[target_tumor==1]))
         print(vsgtt)
-        vst = np.mean(np.abs(vp-vt))
-        print(vst)
+        #vst = np.mean(np.abs(vp-vt))
+        #print(vst)
         dicetott[i] = tumor_dice
-        msetott[i] = mserrort
+        #msetott[i] = mserrort
         precisiontott[i] = precisiont
         recalltott[i] = recallt        
         hdtott[i] = hdistancet
-        mcdtott[i] = mcdt
+        #mcdtott[i] = mcdt
         vsgttott[i] = vsgtt
-        vstott[i] = vst
+        #vstott[i] = vst
 
     if np.sum(target_kidney) != 0.0 and np.sum(target_tumor) != 0.0:
         conf_mat[i] = confusion_matrix(target.flatten(), pred.flatten())
@@ -275,22 +275,22 @@ print('1: media', np.mean(dicetotk) * 100, 'std dev', np.std(dicetotk) * 100)
 print('2: media', np.mean(dicetott) * 100, 'std dev', np.std(dicetott) * 100)
 
 print('dice1: ', dicetotk)
-print('mse1: ', msetotk)
+#print('mse1: ', msetotk)
 print('precision1: ', precisiontotk)
 print('recall1: ', recalltotk)
 print('hd1: ', hdtotk)
-print('mcd1: ', mcdtotk)
+#print('mcd1: ', mcdtotk)
 print('vsgt1: ', vsgttotk)
-print('vs1: ', vstotk)
+#print('vs1: ', vstotk)
 np.savetxt(path + args.pred_folder + '/s1.csv', (dicetotk, precisiontotk, recalltotk, hdtotk, vsgttotk), fmt='%f', delimiter=',')
 print('dice2: ', dicetott)
-print('mse2: ', msetott)
+#print('mse2: ', msetott)
 print('precision2: ', precisiontott)
 print('recall2: ', recalltott)
 print('hd2: ', hdtott)
-print('mcd2: ', mcdtott)
+#print('mcd2: ', mcdtott)
 print('vsgt2: ', vsgttott)
-print('vs2: ', vstott)
+#print('vs2: ', vstott)
 np.savetxt(path + args.pred_folder + '/s2.csv', (dicetott, precisiontott, recalltott, hdtott, vsgttott), fmt='%f', delimiter=',')
 
 print('conf_matrix_back: \n ', conf_mat_back * 100)

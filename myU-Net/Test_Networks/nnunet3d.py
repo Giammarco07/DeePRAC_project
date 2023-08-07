@@ -13,7 +13,7 @@ import shutil
 import time
 import sys
 ee = sys.float_info.epsilon
-from utils.utils import inv_affine, inv_affine3d
+from utils.utils import inv_affine, inv_affine3d, NMS, Graph
 from utils.figures import ensemble, np_to_img
 from utils.pre_post_children import preprocessing_c,postprocessing_c, preprocessing_c25, postprocessing_c25,preprocessing_skel,postprocessing_skel, postprocessing_c_v
 from utils.pre_post_adults import preprocessing_a, postprocessing_a
@@ -21,14 +21,17 @@ from Dataset import Prepare_Test_Data_new,Prepare_Test_Data_skel
 from skimage.transform import resize
 from skimage.morphology import skeletonize, binary_dilation, ball
 from utils.losses import compute_dtm
-
+import networkx as nx
 
 def test(input_folder, patch_size, batch_size, workers, network, nets, channel_dim, in_c, label_path, test_data_path,
             data_results, massimo, minimo, tta, res, preprocessing, device, rsz, supervision, do_seg=False):
-    if network == 'nnunet3D':
+    if network == 'nnunet3D' or network == 'TopNet':
         net = nets[0]
         if os.path.exists(data_results + '/net_3d.pth'):
             net.load_state_dict(torch.load(data_results + '/net_3d.pth'))
+        if supervision == 'topnet':
+            batch_size = 1
+            do_seg = True
     elif network == 'stnpose-nnunet3D':
         net1 = nets[0]
         net2 = nets[1]
@@ -119,7 +122,7 @@ def test(input_folder, patch_size, batch_size, workers, network, nets, channel_d
         pred_3d = np.zeros((channel_dim, imgshape[-3], imgshape[-2], imgshape[-1]), dtype=np.float32)
         # art_3d = np.zeros((1, imgshape[0], imgshape[1], imgshape[2]), dtype=np.float32)
         # ven_3d = np.zeros((1, imgshape[0], imgshape[1], imgshape[2]), dtype=np.float32)
-        if network == 'nnunet3D' or network == 'topnet':
+        if network == 'nnunet3D' or supervision == 'topnet':
             if do_seg:
                 test_loader = Prepare_Test_Data_new(patch_ids, x_, in_c, patch_size[0], patch_size[1], patch_size[2],
                                                     batch_size,
@@ -165,12 +168,12 @@ def test(input_folder, patch_size, batch_size, workers, network, nets, channel_d
                     with torch.no_grad():
                         predict = net(test_image)
                         pred = predict[0]
-                        if do_seg:
-                            for bb in range(test_image.size()[0]):
-                                if test_target[bb, 1].sum() == 0:
-                                    pred[bb, 1, :, :, :] = 0
-                                if test_target[bb, 2].sum() == 0:
-                                    pred[bb, 2, :, :, :] = 0
+                        # if do_seg:
+                        #     for bb in range(test_image.size()[0]):
+                        #         if test_target[bb, 1].sum() == 0:
+                        #             pred[bb, 1, :, :, :] = 0
+                        #         if test_target[bb, 2].sum() == 0:
+                        #             pred[bb, 2, :, :, :] = 0
                         # gt_dis = compute_dtm(test_target[:,1:].cpu().numpy(), predict[1].shape)
 
 
@@ -247,6 +250,72 @@ def test(input_folder, patch_size, batch_size, workers, network, nets, channel_d
                     pred = final_pred
 
                 # dist = predict[1]
+            elif network == 'TopNet':
+                with amp.autocast():
+                    with torch.no_grad():
+                        predict = net(test_image)
+
+                        a_sources = np.argwhere(skeletonize((test_target.cpu().numpy()[0,1]).astype(np.bool)) != 0)
+                        if channel_dim == 3:
+                            v_sources = np.argwhere(skeletonize((test_target.cpu().numpy()[0,2]).astype(np.bool)) != 0)
+                        else:
+                            v_sources = np.empty(patch_size)
+
+                        mask = torch.argmax(predict[0], dim=1, keepdim=True)
+                        vv = np.zeros(patch_size)
+
+                        c_voxels = (predict[1]*mask)[0,0]
+                        c_voxels[c_voxels>1.5] = 1.5
+                        c_vxs = NMS((-c_voxels).cpu().numpy(),5)
+                        p_vxs = np.argwhere(c_vxs != 0)
+
+
+                        features = (predict[2][0]).cpu().numpy()
+
+                        if a_sources.size != 0 and v_sources.size != 0:
+                            #creation of the undirected graph with weighted edges (multiple sources)
+                            vxs = np.concatenate((a_sources[0][np.newaxis,:],v_sources[0][np.newaxis,:],p_vxs))
+                            n_vxs = np.count_nonzero(c_vxs) + 2
+                            g_w = np.zeros((n_vxs,n_vxs))
+                            for it in range(n_vxs):
+                                for jt in  range(it,n_vxs):
+                                    w = np.mean(np.square(features[:,vxs[it,0],vxs[it,1],vxs[it,2]] - features[:,vxs[jt,0],vxs[jt,1],vxs[jt,2]]))
+                                    d = np.sqrt(np.sum(np.square(vxs[it]-vxs[jt]), axis=-1))
+                                    if w>=2 or d>15:
+                                        ww = 0
+                                    else:
+                                        ww = (w*15)**2
+                                    g_w[it,jt] = ww
+                                    g_w[jt,it] = ww
+                            g_graph = nx.Graph(np.array(g_w))
+                            path = nx.multi_source_dijkstra_path(g_graph, {0, 1})
+                            #creation of the two skeleton from the two paths
+                            for it in range(n_vxs):
+                                if it in path:
+                                    vv[vxs[it,0],vxs[it,1],vxs[it,2]] = path[it][0] + 1
+                            #assignment of label (arteries, veins) to each vessel voxel of mask based on the label of "nearest center voxel"
+                            for pos in torch.nonzero(mask[0,0]):
+                                min_dist = np.argmin(np.sum((vxs - pos.cpu().numpy()) ** 2, axis=1))
+                                mask[0,0,pos[0],pos[1],pos[2]] = vv[vxs[min_dist,0],vxs[min_dist,1],vxs[min_dist,2]]
+                            pred = torch.moveaxis(torch.nn.functional.one_hot(mask.squeeze(1), num_classes=channel_dim),-1,1).float()
+
+                        #no veins
+                        elif a_sources.size != 0 and v_sources.size == 0:
+                                pred = torch.moveaxis(torch.nn.functional.one_hot(mask.squeeze(1), num_classes=channel_dim), -1,
+                                                      1).float()
+                        #no arteries
+                        elif a_sources.size == 0 and v_sources.size != 0:
+                                mask[mask==1] = 2
+                                pred = torch.moveaxis(torch.nn.functional.one_hot(mask.squeeze(1), num_classes=channel_dim), -1,
+                                                      1).float()
+                        #no arteries and veins
+                        else:
+                            mask[mask == 1] = 0
+                            pred = torch.moveaxis(torch.nn.functional.one_hot(mask.squeeze(1), num_classes=channel_dim), -1,
+                                                  1).float()
+
+
+
 
             elif network == 'stnpose-nnunet3D':
                 white = torch.ones((test_image.size()[0], 1, patch_size[0], patch_size[1], patch_size[2]),
@@ -307,7 +376,7 @@ def test(input_folder, patch_size, batch_size, workers, network, nets, channel_d
                     h += 1
             '''
 
-            if network == 'nnunet3D':
+            if network == 'nnunet3D' or network == 'TopNet':
                 if ((j * batch_size) + batch_size) < n_pred:
                     for h, p in zip(range(j * batch_size, j * batch_size + batch_size), range(batch_size)):
                         (d, h, w) = patch_ids[h]

@@ -15,7 +15,7 @@ import time
 import sys
 ee = sys.float_info.epsilon
 from utils.figures import np_to_img
-from utils.losses import fnr,ce, soft_dice_loss, dice_loss, soft_dice_loss_old,soft_dice_loss_batch, soft_dice_loss_old_new, dice_loss_val_new, compute_dtm, compute_ddt, L1, bce, general_dice_loss_batch, c_loss, top_loss, compute_center_dtm
+from utils.losses import fnr,ce, soft_dice_loss, dice_loss, soft_dice_loss_old,soft_dice_loss_batch, soft_dice_loss_old_new, dice_loss_val_new, compute_dtm, compute_ddt, L1, L2, bce, general_dice_loss_batch, c_loss, top_loss, compute_center_dtm
 from utils.vesselness_torch import vesselness_frangi_ssvmd, vesselness_jerman_ssvmd, msloss, fvloss
 from Test_Networks.nnunet3d import val
 
@@ -48,6 +48,8 @@ def train(start_epoch, num_epochs, best_dice, val_step, early_stopping, nets, op
         scaler = amp2.GradScaler()
         # Lists to keep track of progress
     valdices = []
+    if supervision == 'topnet':
+        channel_dim = 2
     vals = np.zeros((num_epochs, channel_dim - 1))
     if supervision[0:10]=='deepvessel' or supervision=='fnr':
         valv = np.zeros((num_epochs, channel_dim - 1))
@@ -56,8 +58,6 @@ def train(start_epoch, num_epochs, best_dice, val_step, early_stopping, nets, op
     train_loader0 = train_loader[0]
     train_loader1 = train_loader[1]
 
-    if supervision == 'topnet':
-        channel_dim -= 1
 
     mloss = []
     vloss = []
@@ -400,6 +400,23 @@ def train(start_epoch, num_epochs, best_dice, val_step, early_stopping, nets, op
 
                         loss_G_joint = loss_dice + loss_c + loss_top
                         # V_losses.append(loss_top.item())
+                    elif supervision == 'topnet-loc':
+                        out = output[0].clone() + 1e-20
+
+                        with torch.no_grad():
+                            tgt = torch.zeros_like(target).to(device, non_blocking=True)
+                            for bb in batch_size:
+                                tgt[bb,1] = skeletonize(target.cpu().numpy()[bb, 1])
+                                if channel_dim == 3:
+                                    tgt[bb,2] = skeletonize(target.cpu().numpy()[bb, 2])
+
+
+                        loss_dice = L2(out[:,1:], tgt[:,1:])
+                        loss_ce = ce(torch.log(out), torch.argmax(tgt, dim=1))
+
+                        loss_G_joint = loss_dice + loss_ce
+
+
                     else: #example supervision == 'dense'
                         out = output[0].clone() + 1e-20
                         loss_dice = -torch.log(soft_dice_loss(out, target))
@@ -637,6 +654,7 @@ def train(start_epoch, num_epochs, best_dice, val_step, early_stopping, nets, op
                 else:
                     with torch.no_grad():
                         predict = net(val_image)
+
                 pred = predict[0]
                 torch.cuda.synchronize()    
                 valstep2 = time.time()
@@ -646,8 +664,21 @@ def train(start_epoch, num_epochs, best_dice, val_step, early_stopping, nets, op
                     val_seg = torch.argmax(val_target, dim=1)
                     val_seg_vessels = val_seg.bool().long()
                     val_target = torch.moveaxis(torch.nn.functional.one_hot(val_seg_vessels, num_classes=2), -1, 1)
+                elif supervision=='topnet-loc':
+                    tgt = torch.zeros_like(val_target).to(device, non_blocking=True)
+                    for bb in batch_size:
+                        tgt[bb, 1] = skeletonize(val_target.cpu().numpy()[bb, 1])
+                        if channel_dim == 3:
+                            tgt[bb, 2] = skeletonize(val_target.cpu().numpy()[bb, 2])
+                else:
+                    pass
 
-                val_dice = 1 - soft_dice_loss_batch(pred, val_target)
+
+
+                if supervision=='topnet-loc':
+                    val_dice = 1 - L2(pred[:, 1:], tgt[:, 1:])
+                else:
+                    val_dice = 1 - soft_dice_loss_batch(pred, val_target)
                 dices.append(val_dice.item())
                 
                 if supervision=='fnr':
@@ -660,7 +691,6 @@ def train(start_epoch, num_epochs, best_dice, val_step, early_stopping, nets, op
                         val_s = 1 - soft_dice_loss_batch(pred[batch // 2:batch, k, :, :, :],
                                                   val_target[batch // 2:batch, k, :, :, :],channel=True)
                         dices_s[k - 1] += val_s.item()
-                    
                 elif supervision == 'deepvesselmsloss':
                     val_vessel = msloss([pred], val_target.type(torch.float16), sigma=25, gt=False)
                     vessels.append(wv*val_vessel.item())
@@ -708,6 +738,10 @@ def train(start_epoch, num_epochs, best_dice, val_step, early_stopping, nets, op
                 #     gt_dis = torch.from_numpy(gt_dis).float().to(device)
                 #     val_loss_c = c_loss(predict[1], gt_dis, val_seg_vessels)
                 #     val_loss_top = top_loss(predict[2], val_seg, center_vessels)
+                elif supervision=='topnet-loc':
+                    for k in range(1, channel_dim):
+                        val_s = 1 - L2(pred[batch // 2:batch, k:k+1], tgt[batch // 2:batch, k:k+1])
+                        dices_s[k - 1] += val_s.item()
                 else:
                     for k in range(1, channel_dim):
                         val_s = dice_loss_val_new(pred[batch // 2:batch, k, :, :, :], val_target[batch // 2:batch, k, :, :, :])

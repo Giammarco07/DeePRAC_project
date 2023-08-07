@@ -4,7 +4,7 @@ def Training(path, network,nets,optimizers,learning,lr,channel_dim, train_loader
     #if mode='debug' you can print time and memory for each step during training
 
 
-    if network == 'nnunet3D' or network== 'TopNet':
+    if network == 'nnunet3D' or network[:6]== 'TopNet':
         Train_Networks.nnunet3d.train(start_epoch, num_epochs, best_dice, val_step, early_stopping, nets, optimizers, learning, lr,
                        channel_dim, train_loader, val_loader, data_results, massimo, minimo, supervision, device, asnnunet, mode=None, log=False)
     elif network == 'nnunet2.5D':
@@ -109,7 +109,7 @@ def Training_new(network,nets,optimizers,learning,lr,channel_dim, train_loader, 
 def Testing(task,input_folder,  patch_size, batch_size, workers, network, nets, channel_dim, in_c, label_path, test_data_path,
                       data_results, massimo, minimo, tta, res, preprocessing, device, rsz, norm, skel, supervision):
 
-    if network == 'nnunet3D' or network == 'stnpose-nnunet3D'  or network== 'TopNet':
+    if network == 'nnunet3D' or network == 'stnpose-nnunet3D'  or network[:6]== 'TopNet':
       if task == 'Task208_NECKER' and skel:
             Test_Networks.nnunet3d.test_skel(input_folder, patch_size, batch_size, workers, network, nets, channel_dim, label_path, test_data_path, data_results, massimo, minimo, tta, res, preprocessing, device, rsz, norm)
       else:

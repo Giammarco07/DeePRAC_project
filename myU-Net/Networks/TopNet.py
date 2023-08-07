@@ -307,5 +307,5 @@ class net_loc(nn.Module):
             output1 = self.outputblock1(skip14)
 
 
-            return output1
+            return output1,
 
