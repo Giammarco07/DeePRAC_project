@@ -259,7 +259,7 @@ def test(input_folder, patch_size, batch_size, workers, network, nets, channel_d
                         if channel_dim == 3:
                             v_sources = np.argwhere(skeletonize((test_target.cpu().numpy()[0,2]).astype(np.bool)) != 0)
                         else:
-                            v_sources = np.empty(patch_size)
+                            v_sources = np.empty(shape=(0,0,0))
 
                         mask = torch.argmax(predict[0], dim=1, keepdim=True)
                         vv = np.zeros(patch_size)

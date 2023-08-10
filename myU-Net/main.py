@@ -337,6 +337,7 @@ if input =='children' and network=='nnunet3D':
         net = UNet3D.net_new(args.ngpu,channel_dim, use_bias=use_bias, in_c = in_c).to(device)
 elif input=='children' and network=='TopNet':
     net = TopNet.net(args.ngpu).to(device)
+    supervision = 'topnet'
 elif input=='children' and network=='TopNet-Loc':
     net = TopNet.net_loc(args.ngpu).to(device)
 elif input=='children' and network=='DVAE':
