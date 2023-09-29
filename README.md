@@ -114,7 +114,7 @@ Our vesselness loss function, named Tubular structures Loss - T sLoss, is compos
 Following Figure shows the complete pipeline for the proposed tubular structures loss function. 
 ![TsLoss](assets/pipeline-tsloss-new.png)
 
-This approach led to a paper accepted at the journal of Medical Image Analysis [MedIA] Link to the [paper](...)
+This approach led to a paper accepted at the journal of Medical Image Analysis [MedIA] Link to the [paper](https://telecom-paris.hal.science/hal-04222626)
 The relative code implementation is in myU-Net/utils/vesselness_torch.py.
 (The code implementation is just for 3D images/patches, not yet implemented for 2D images/slices)
 
